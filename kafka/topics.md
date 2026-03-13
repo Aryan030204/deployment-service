@@ -1,0 +1,3 @@
+# Kafka Topics
+
+- brands-topic
