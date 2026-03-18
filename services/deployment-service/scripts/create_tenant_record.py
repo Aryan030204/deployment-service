@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(root_dir, ".env"))
 
 CREATE_TENANT_API = os.getenv("CREATE_TENANT_API")
-X_PIPELINE_KEY = os.getenv("PIPELINE_AUTH_HEADER")
+X_PIPELINE_KEY = os.getenv("X_PIPELINE_KEY") or os.getenv("PIPELINE_AUTH_HEADER")
 READ_REPLICA = os.getenv("READ_REPLICA")
 DB_HOST = os.getenv("DB_HOST")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
@@ -47,25 +47,60 @@ def _build_payload(data: dict) -> dict:
     brand_id = data.get("brand_id")
     brand_name = data.get("brand_name")
     shop_name = data.get("shop_name")
+    access_token = data.get("access_token", "")
+    app_id_mapping = data.get("app_id_mapping", "")
+    speed_key = data.get("speed_key", "")
 
     return {
         "brand_id": brand_name,
         "brand_num": brand_id,
-        "shard_id": brand_name,
+        "shard_id": brand_name.lower(),
         "rds_proxy_endpoint": READ_REPLICA,
         "database": brand_name,
         "db_host": DB_HOST,
         "user": "admin",
-        "app_id_mapping": "",
+        "app_id_mapping": app_id_mapping,
         "password": DB_PASSWORD,
         "shop_name": shop_name,
         "api_version": API_VERSION,
-        "access_token": "",
+        "access_token": access_token,
         "port": 3306,
         "status": "active",
-        "speed_key": "",
+        "speed_key": speed_key,
         "session_url": "",
     }
+
+
+def create_tenant_record(payload: dict) -> bool:
+    missing_env = _missing_env_vars()
+    if missing_env:
+        print(f"❌ Missing required env vars: {', '.join(missing_env)}")
+        return False
+
+    headers = {"x-pipeline-key": X_PIPELINE_KEY}
+    response = requests.post(
+        CREATE_TENANT_API,
+        json=payload,
+        headers=headers,
+        timeout=30,
+    )
+    if 200 <= response.status_code < 300:
+        return True
+    print(f"❌ Tenant API failed ({response.status_code}): {response.text[:500]}")
+    return False
+
+
+def process_event(data: dict) -> bool:
+    tenant_payload = data.get("tenant_payload") or _build_payload(data)
+    brand_name = data.get("brand_name")
+    if not tenant_payload.get("brand_num") or not tenant_payload.get("brand_id") or not tenant_payload.get("shop_name"):
+        print("⚠️ Missing required fields for tenant payload.")
+        return False
+
+    ok = create_tenant_record(tenant_payload)
+    if ok:
+        print(f"✅ Tenant record created for brand_name={brand_name}")
+    return ok
 
 
 def run():
@@ -108,19 +143,7 @@ def run():
                     print("⚠️ Missing required fields: brand_id, brand_name, shop_name")
                     continue
 
-                payload = _build_payload(data)
-                headers = {"x-pipeline-key": X_PIPELINE_KEY}
-
-                response = requests.post(
-                    CREATE_TENANT_API,
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
-                if 200 <= response.status_code < 300:
-                    print(f"✅ Tenant record created for brand_name={brand_name}")
-                else:
-                    print(f"❌ Tenant API failed ({response.status_code}): {response.text[:500]}")
+                process_event(data)
 
             except json.JSONDecodeError as exc:
                 print(f"❌ Invalid JSON payload: {exc}")

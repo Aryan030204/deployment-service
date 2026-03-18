@@ -3697,6 +3697,55 @@ from confluent_kafka import Consumer
 from config.settings import KAFKA_BROKER, KAFKA_TOPIC
 
 BACKFILL_TOPIC = KAFKA_TOPIC
+_BACKFILL_INITIALIZED = False
+
+
+def _initialize_backfill_runtime() -> bool:
+    global _BACKFILL_INITIALIZED, BACKFILL_MODE, BACKFILL_START_IST, BACKFILL_END_IST
+    if _BACKFILL_INITIALIZED:
+        return True
+
+    initialize_brand_configs()
+    if not active_brand_indices:
+        print("❌ No active brands initialized.")
+        return False
+
+    yesterday = now_ist() - timedelta(days=1)
+    start_dt = yesterday - timedelta(days=60)
+    backfill_start = start_dt.strftime("%Y-%m-%d")
+    backfill_end = yesterday.strftime("%Y-%m-%d")
+
+    BACKFILL_MODE = True
+    BACKFILL_START_IST = _parse_backfill_dt(backfill_start)
+    BACKFILL_END_IST = _parse_backfill_dt(backfill_end)
+
+    if not BACKFILL_START_IST or not BACKFILL_END_IST:
+        print("❌ Failed to parse backfill dates.")
+        return False
+
+    _BACKFILL_INITIALIZED = True
+    return True
+
+
+def process_event(data: dict) -> bool:
+    brand_tag = data.get("brand_tag") or data.get("brand_name", "").lower()
+    if not brand_tag:
+        print("⚠️ Missing brand_tag/brand_name in payload.")
+        return False
+
+    if not _initialize_backfill_runtime():
+        return False
+
+    global BACKFILL_BRAND_INDICES
+    brand_idx = brand_tag_to_index_map.get(str(brand_tag).lower())
+    if brand_idx is None:
+        print(f"❌ Brand tag '{brand_tag}' not found in active brands: {list(brand_tag_to_index_map.keys())}")
+        return False
+
+    BACKFILL_BRAND_INDICES = {brand_idx}
+    process_single_brand(brand_idx)
+    print(f"✅ Backfill completed for {brand_tag}")
+    return True
 
 def run():
     print("🚀 Starting Standalone Backfill Consumer")
@@ -3711,21 +3760,7 @@ def run():
 
     print(f"📅 Calculated Backfill Range (60 days from yesterday): {backfill_start} to {backfill_end}")
 
-    # Initialize configs
-    initialize_brand_configs()
-
-    if not active_brand_indices:
-        print("❌ No active brands initialized. Exiting.")
-        return
-
-    # Override Backfill Dates in globals (since we copied them)
-    global BACKFILL_MODE, BACKFILL_START_IST, BACKFILL_END_IST, BACKFILL_BRAND_INDICES
-    BACKFILL_MODE = True
-    BACKFILL_START_IST = _parse_backfill_dt(backfill_start)
-    BACKFILL_END_IST = _parse_backfill_dt(backfill_end)
-
-    if not BACKFILL_START_IST or not BACKFILL_END_IST:
-        print("❌ Failed to parse backfill dates.")
+    if not _initialize_backfill_runtime():
         return
 
     consumer = Consumer(
@@ -3752,27 +3787,7 @@ def run():
                 print(f"📩 Received backfill request: {payload}")
                 
                 data = json.loads(payload)
-                brand_tag = data.get("brand_tag")
-                
-                if not brand_tag:
-                    print("⚠️ Missing brand_tag in payload.")
-                    continue
-
-                # Find brand index
-                brand_idx = brand_tag_to_index_map.get(brand_tag.lower())
-                if brand_idx is None:
-                    print(f"❌ Brand tag '{brand_tag}' not found in active brands: {list(brand_tag_to_index_map.keys())}")
-                    continue
-
-                print(f"🎯 Triggering backfill for {brand_tag} (index={brand_idx})")
-                
-                # Override restriction
-                BACKFILL_BRAND_INDICES = {brand_idx}
-                
-                # Call process_single_brand
-                process_single_brand(brand_idx)
-                
-                print(f"✅ Backfill completed for {brand_tag}")
+                process_event(data)
 
             except Exception as e:
                 print(f"❌ Error processing message: {e}")

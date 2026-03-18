@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(root_dir, ".env"))
 
 GET_SPEED_TOKEN_API = os.getenv("GET_SPEED_TOKEN_API")
-PIPELINE_AUTH_HEADER = os.getenv("X_PIPELINE_KEY")
+PIPELINE_AUTH_HEADER = os.getenv("PIPELINE_AUTH_HEADER") or os.getenv("X_PIPELINE_KEY")
 PERMISSIONS = ["upload:files", "read:files", "metrics:read"]
 
 
@@ -42,6 +42,36 @@ def _build_payload(brand_name: str) -> dict:
         "name": brand_name,
         "permissions": PERMISSIONS,
     }
+
+
+def generate_speed_key(brand_name: str) -> str | None:
+    missing_env = _missing_env_vars()
+    if missing_env:
+        print(f"❌ Missing required env vars: {', '.join(missing_env)}")
+        return None
+    if not brand_name:
+        print("⚠️ Missing required field: brand_name")
+        return None
+
+    payload = _build_payload(brand_name)
+    headers = {"x-pipeline-key": PIPELINE_AUTH_HEADER}
+    response = requests.post(
+        GET_SPEED_TOKEN_API,
+        json=payload,
+        headers=headers,
+        timeout=30,
+    )
+
+    if 200 <= response.status_code < 300:
+        response_data = response.json()
+        return response_data.get("plain_key")
+
+    print(f"❌ Speed token API failed ({response.status_code}): {response.text[:500]}")
+    return None
+
+
+def process_event(data: dict) -> str | None:
+    return generate_speed_key(data.get("brand_name"))
 
 
 def run():
@@ -77,30 +107,11 @@ def run():
 
                 data = json.loads(raw_payload)
                 brand_name = data.get("brand_name")
-
-                if not brand_name:
-                    print("⚠️ Missing required field: brand_name")
-                    continue
-
-                payload = _build_payload(brand_name)
-                headers = {"x-pipeline-key": PIPELINE_AUTH_HEADER}
-
-                response = requests.post(
-                    GET_SPEED_TOKEN_API,
-                    json=payload,
-                    headers=headers,
-                    timeout=30,
-                )
-
-                if 200 <= response.status_code < 300:
-                    response_data = response.json()
-                    plain_key = response_data.get("plain_key")
-                    if plain_key:
-                        print(f"✅ Speed token generated for {brand_name}: {plain_key}")
-                    else:
-                        print(f"❌ plain_key missing in response for {brand_name}: {response_data}")
+                plain_key = process_event(data)
+                if plain_key:
+                    print(f"✅ Speed token generated for {brand_name}: {plain_key}")
                 else:
-                    print(f"❌ Speed token API failed ({response.status_code}): {response.text[:500]}")
+                    print(f"❌ Failed to generate speed token for {brand_name}")
 
             except json.JSONDecodeError as exc:
                 print(f"❌ Invalid JSON payload: {exc}")

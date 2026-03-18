@@ -152,6 +152,20 @@ def generate_access_token(shop_name: str, client_id: str, client_secret: str) ->
         return None
 
 
+def process_event(data: dict) -> str | None:
+    shop_name = data.get("shop_name")
+    encrypted_client_id = data.get("client_id")
+    encrypted_client_secret = data.get("client_secret")
+
+    if not all([shop_name, encrypted_client_id, encrypted_client_secret]):
+        print("⚠️ Missing required fields: shop_name, client_id, client_secret")
+        return None
+
+    client_id = decrypt_value(encrypted_client_id)
+    client_secret = decrypt_value(encrypted_client_secret)
+    return generate_access_token(shop_name, client_id, client_secret)
+
+
 # ---------------------------
 # Kafka Consumer
 # ---------------------------
@@ -182,23 +196,8 @@ def run():
                 print(f"📩 Received Event: {payload}")
 
                 data = json.loads(payload)
+                access_token = process_event(data)
                 shop_name = data.get("shop_name")
-                encrypted_client_id = data.get("client_id")
-                encrypted_client_secret = data.get("client_secret")
-
-                if not all([shop_name, encrypted_client_id, encrypted_client_secret]):
-                    print("⚠️ Missing required fields: shop_name, client_id, client_secret")
-                    continue
-
-                # Decrypt credentials
-                client_id = decrypt_value(encrypted_client_id)
-                client_secret = decrypt_value(encrypted_client_secret)
-
-                print(f"🔑 Decrypted client_id: {client_id[:6]}...")
-                print(f"🔑 Decrypted client_secret: {client_secret[:6]}...")
-
-                # Execute OAuth flow
-                access_token = generate_access_token(shop_name, client_id, client_secret)
 
                 if access_token:
                     print(f"🎉 Final Access Token for {shop_name}: {access_token}")

@@ -108,6 +108,30 @@ def clone_database(source_db, target_db):
     except Exception as e:
         print(f"❌ Critical error during cloning: {e}")
 
+
+def process_event(data: dict) -> bool:
+    target_db = (
+        data.get("target_db_name")
+        or data.get("brand_tag")
+        or ((data.get("tenant_payload") or {}).get("database"))
+        or data.get("brand_name")
+    )
+    if not target_db:
+        print("⚠️ Missing target_db_name/brand_tag/tenant_payload.database/brand_name in payload.")
+        return False
+
+    source_db = get_source_db_name()
+    if not source_db:
+        print("❌ Failed to resolve Source Database from master.brands.")
+        return False
+
+    if source_db.lower() == str(target_db).lower():
+        print("❌ Source and Target databases are the same. Skipping clone.")
+        return False
+
+    clone_database(source_db, target_db)
+    return True
+
 def run():
     print("🚀 Starting Database Clone Consumer")
     
@@ -135,30 +159,7 @@ def run():
                 print(f"📩 Received Event: {payload}")
                 
                 data = json.loads(payload)
-                # Parse target target_db from trigger payload
-                # User specified payload has target target name
-                # Standard payload has either brand_tag or target_db_name
-                target_db = data.get("target_db_name") or data.get("brand_tag")
-                
-                if not target_db:
-                    print("⚠️ Missing target_db_name or brand_tag in payload.")
-                    continue
-
-                # Lookup Source DB from master.brands
-                source_db = get_source_db_name()
-                if not source_db:
-                    print("❌ Failed to resolve Source Database from master.brands.")
-                    continue
-
-                print(f"🔍 Discovered Source DB: {source_db}")
-                print(f"🎯 Target DB: {target_db}")
-
-                if source_db.lower() == target_db.lower():
-                     print("❌ Source and Target databases are the same. Skipping clone.")
-                     continue
-                
-                # Execute cloning workflow
-                clone_database(source_db, target_db)
+                process_event(data)
 
             except Exception as e:
                 print(f"❌ Error processing message: {e}")
