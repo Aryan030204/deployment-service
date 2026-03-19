@@ -389,7 +389,7 @@ def decrypt_value(encrypted_val: str) -> str:
     try:
         return decrypt(encrypted_val)
     except Exception as e:
-        logger.error(f"❌ Decryption failed: {e}")
+        logger.error(f"❌ Decryption failed for value='{encrypted_val}': {e}")
         return encrypted_val
 
 def fetch_active_brands() -> Dict[str, str]:
@@ -425,6 +425,8 @@ def fetch_brand_config(brand_id: str) -> Optional[Dict[str, Any]]:
         return None
 
     headers = {"x-pipeline-key": PIPELINE_AUTH_HEADER}
+    logger.info(f"Headers: {headers}")
+    logger.info(f"Brand ID: {brand_id}")
     url = f"{GET_BRANDS_API.rstrip('/')}/{brand_id.lower()}"
     
     logger.info(f"📡 Fetching config from: {url}")

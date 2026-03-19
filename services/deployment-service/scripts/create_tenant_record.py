@@ -52,7 +52,7 @@ def _build_payload(data: dict) -> dict:
     speed_key = data.get("speed_key", "")
 
     return {
-        "brand_id": brand_name,
+        "brand_id": brand_name.upper(),
         "brand_num": brand_id,
         "shard_id": brand_name.lower(),
         "rds_proxy_endpoint": READ_REPLICA,

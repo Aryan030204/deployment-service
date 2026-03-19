@@ -44,7 +44,14 @@ def decrypt(encrypted_text: str) -> str:
         return ""
         
     key = _get_key()
-    combined = base64.b64decode(encrypted_text.encode("utf-8"))
+    
+    if ":" in encrypted_text:
+        iv_b64, ciphertext_b64 = encrypted_text.split(":", 1)
+        iv_bytes = base64.b64decode(iv_b64.encode("utf-8"))
+        ciphertext_bytes = base64.b64decode(ciphertext_b64.encode("utf-8"))
+        combined = iv_bytes + ciphertext_bytes
+    else:
+        combined = base64.b64decode(encrypted_text.encode("utf-8"))
     
     if len(combined) < 16:
         raise ValueError("Invalid encrypted data: too short")
@@ -52,11 +59,20 @@ def decrypt(encrypted_text: str) -> str:
     iv = combined[:16]
     ciphertext = combined[16:]
     
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-    decryptor = cipher.decryptor()
-    padded_data = decryptor.update(ciphertext) + decryptor.finalize()
-    
-    unpadder = padding.PKCS7(128).unpadder()
-    data = unpadder.update(padded_data) + unpadder.finalize()
-    
-    return data.decode("utf-8")
+    # 1. Try standard SHA-256 derived key
+    try:
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        padded_data = decryptor.update(ciphertext) + decryptor.finalize()
+        unpadder = padding.PKCS7(128).unpadder()
+        return (unpadder.update(padded_data) + unpadder.finalize()).decode("utf-8")
+    except Exception:
+        # 2. Fallback to raw NULL padded key (API node formats)
+        raw_pass = os.getenv("PASSWORD_AES_KEY") or ""
+        key_pad = raw_pass.encode("utf-8").ljust(32, b'\0')[:32]
+        
+        cipher = Cipher(algorithms.AES(key_pad), modes.CBC(iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        padded_data = decryptor.update(ciphertext) + decryptor.finalize()
+        unpadder = padding.PKCS7(128).unpadder()
+        return (unpadder.update(padded_data) + unpadder.finalize()).decode("utf-8")

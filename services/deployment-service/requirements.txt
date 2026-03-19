@@ -11,3 +11,4 @@ aiohttp
 pymysql
 fastapi
 uvicorn
+pymongo

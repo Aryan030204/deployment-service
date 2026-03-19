@@ -55,7 +55,11 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "db_user": db_user,
         "access_token": "",
         "api_version": _env("API_VERSION"),
-        "app_id_mapping": "",
+        "app_id_mapping": """{
+    "238372913153": "GoKwik",
+    "580111": "Online Store",
+    "1354745": "Draft Order"
+}""",
         "brand_tag": brand_tag,
         "db_database": brand_name,
         "my_sql_url": f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{brand_name}?charset=utf8mb4" + ("&ssl=true" if db_host.lower() not in ["localhost", "127.0.0.1"] else ""),

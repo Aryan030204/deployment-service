@@ -55,23 +55,55 @@ def generate_speed_key(brand_name: str) -> str | None:
 
     payload = _build_payload(brand_name)
     headers = {"x-pipeline-key": PIPELINE_AUTH_HEADER}
-    response = requests.post(
-        GET_SPEED_TOKEN_API,
-        json=payload,
-        headers=headers,
-        timeout=30,
-    )
+    try:
+        response = requests.post(
+            GET_SPEED_TOKEN_API,
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
 
-    if 200 <= response.status_code < 300:
-        response_data = response.json()
-        return response_data.get("plain_key")
+        if 200 <= response.status_code < 300:
+            response_data = response.json()
+            return response_data.get("plain_key")
 
-    print(f"❌ Speed token API failed ({response.status_code}): {response.text[:500]}")
-    return None
+        print(f"❌ Speed token API failed ({response.status_code}): {response.text[:500]}")
+        print("⚠️ [Temporary] Falling back to 'speed123' token fallback (API failure).")
+        return "speed123"
+
+    except Exception as e:
+        print(f"❌ Speed token API request exception: {e}")
+        print("⚠️ [Temporary] Falling back to 'speed123' token fallback (API exception).")
+        return "speed123"
+
 
 
 def process_event(data: dict) -> str | None:
-    return generate_speed_key(data.get("brand_name"))
+    brand_name = data.get("brand_name")
+    brand_url = data.get("brand_url")
+
+    if brand_name and brand_url:
+        speed_db_uri = os.getenv("SPEED_DB_URI")
+        if speed_db_uri:
+            try:
+                from pymongo import MongoClient
+                client = MongoClient(speed_db_uri)
+                db = client["pagespeed_brands"]
+                collection = db["brands"]
+                
+                # Upsert to prevent duplicates
+                collection.update_one(
+                    {"brand_name": brand_name},
+                    {"$addToSet": {"urls": brand_url}},
+                    upsert=True
+                )
+                print(f"✅ Created/Updated MongoDB document for {brand_name}")
+            except Exception as e:
+                print(f"❌ MongoDB error for {brand_name}: {e}")
+        else:
+            print("⚠️ SPEED_DB_URI not set in environment, skipping MongoDB insertion")
+
+    return generate_speed_key(brand_name)
 
 
 def run():

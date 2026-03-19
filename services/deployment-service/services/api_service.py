@@ -19,6 +19,7 @@ class BrandEventRequest(BaseModel):
     client_secret: str
     shop_name: str
     code: Optional[str] = None
+    brand_url: Optional[str] = None
 
 @app.post("/push-brand-event", status_code=status.HTTP_200_OK)
 async def push_brand_event(
@@ -59,6 +60,10 @@ async def push_brand_event(
             logger.info(f"📝 Appending code to payload for Kafka: {request.code[:8]}...")
         else:
             logger.info("ℹ️ No code parameter found in API request payload")
+            
+        if request.brand_url:
+            payload["brand_url"] = request.brand_url
+            logger.info(f"📝 Appending brand_url to payload: {request.brand_url}")
         
         # 4. Publish to Kafka
         publish_brand_event(payload)

@@ -57,8 +57,14 @@ def _build_payload(data: dict) -> dict:
     db_user = "admin"
     db_port = int(DB_PORT)
     access_token = data.get("access_token", "")
-    app_id_mapping = data.get("app_id_mapping", "")
     speed_key = data.get("speed_key", "")
+
+    DEFAULT_APP_ID_MAPPING = """{
+    "238372913153": "GoKwik",
+    "580111": "Online Store",
+    "1354745": "Draft Order"
+}"""
+    app_id_mapping = data.get("app_id_mapping") or DEFAULT_APP_ID_MAPPING
 
     return {
         "brand_id": brand_id,
@@ -87,13 +93,14 @@ def create_pipelinecreds(payload: dict) -> bool:
         print(f"❌ Missing required env vars: {', '.join(missing_env)}")
         return False
     headers = {"x-pipeline-key": PIPELINE_KEY}
+    print(f"DEBUG create_pipelinecreds payload to {CREATE_PIPELINECREDS_API}:\n{json.dumps(payload, indent=2)}")
     response = requests.post(
         CREATE_PIPELINECREDS_API,
         json=payload,
         headers=headers,
         timeout=30,
     )
-    if response.status_code == 200:
+    if 200 <= response.status_code < 300:
         return True
     print(f"❌ PipelineCreds API failed ({response.status_code}): {response.text[:500]}")
     return False

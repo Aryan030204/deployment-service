@@ -3,12 +3,14 @@ version: "3.8"
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
+    restart: unless-stopped
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
     image: confluentinc/cp-kafka:7.6.1
+    restart: unless-stopped
     depends_on:
       - zookeeper
     ports:
@@ -28,6 +30,7 @@ services:
       dockerfile: services/deployment-service/Dockerfile
     depends_on:
       - kafka
+    restart: unless-stopped
     ports:
       - "8000:8000"
     env_file:
