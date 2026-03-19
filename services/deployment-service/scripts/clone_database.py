@@ -39,7 +39,8 @@ def get_source_db_name():
             user=DB_USER,
             password=DB_PASSWORD,
             port=DB_PORT,
-            database=MASTER_DB
+            database=MASTER_DB,
+            ssl_disabled=False
         )
         cursor = cnx.cursor()
         query = "SELECT db_name FROM brands ORDER BY id DESC LIMIT 1;"
@@ -69,7 +70,8 @@ def clone_database(source_db, target_db):
             host=DB_HOST,
             user=DB_USER,
             password=DB_PASSWORD,
-            port=DB_PORT
+            port=DB_PORT,
+            ssl_disabled=False
         )
         cursor = cnx.cursor()
 

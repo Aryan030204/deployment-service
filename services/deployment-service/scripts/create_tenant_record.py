@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(root_dir, ".env"))
 
 CREATE_TENANT_API = os.getenv("CREATE_TENANT_API")
-X_PIPELINE_KEY = os.getenv("X_PIPELINE_KEY") or os.getenv("PIPELINE_AUTH_HEADER")
+X_PIPELINE_KEY = os.getenv("PIPELINE_AUTH_HEADER")
 READ_REPLICA = os.getenv("READ_REPLICA")
 DB_HOST = os.getenv("DB_HOST")
 DB_PASSWORD = os.getenv("DB_PASSWORD")

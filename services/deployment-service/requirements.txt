@@ -1,2 +1,13 @@
 confluent-kafka
 python-dotenv
+requests
+cryptography
+pandas
+numpy
+mysql-connector-python
+sqlalchemy
+apscheduler
+aiohttp
+pymysql
+fastapi
+uvicorn

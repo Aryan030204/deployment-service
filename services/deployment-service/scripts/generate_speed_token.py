@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(root_dir, ".env"))
 
 GET_SPEED_TOKEN_API = os.getenv("GET_SPEED_TOKEN_API")
-PIPELINE_AUTH_HEADER = os.getenv("PIPELINE_AUTH_HEADER") or os.getenv("X_PIPELINE_KEY")
+PIPELINE_AUTH_HEADER = os.getenv("PIPELINE_AUTH_HEADER")
 PERMISSIONS = ["upload:files", "read:files", "metrics:read"]
 
 

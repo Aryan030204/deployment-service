@@ -58,7 +58,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "app_id_mapping": "",
         "brand_tag": brand_tag,
         "db_database": brand_name,
-        "my_sql_url": f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{brand_name}?charset=utf8mb4",
+        "my_sql_url": f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{brand_name}?charset=utf8mb4" + ("&ssl=true" if db_host.lower() not in ["localhost", "127.0.0.1"] else ""),
         "shop_name": shop_name,
         "speed_key": "",
     }

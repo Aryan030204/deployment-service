@@ -7,6 +7,7 @@ import sys
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
+from shared.utils.encryption import decrypt
 
 # Add services/deployment-service to sys.path (for config)
 service_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -383,40 +384,10 @@ TOTAL_CONFIG_COUNT = int(os.environ.get("TOTAL_CONFIG_COUNT", "0"))
 
 def decrypt_value(encrypted_val: str) -> str:
     """
-    Decrypts a value that was encrypted using AES-256-CBC.
-    Expected format: 'iv_b64:ciphertext_b64'
+    Decrypts a value that was encrypted using AES-256-CBC using shared utility.
     """
-    if not encrypted_val or ":" not in encrypted_val:
-        return encrypted_val
-
-    if not PASSWORD_AES_KEY:
-        logger.warning("PASSWORD_AES_KEY not found in environment. Returning raw value.")
-        return encrypted_val
-
     try:
-        iv_b64, ciphertext_b64 = encrypted_val.split(":", 1)
-        iv = base64.b64decode(iv_b64)
-        ciphertext = base64.b64decode(ciphertext_b64)
-
-        # AES-256 requires 32-byte key
-        key_bytes = PASSWORD_AES_KEY.encode("utf-8")
-        if len(key_bytes) < 32:
-            key_bytes = key_bytes.ljust(32, b'\0')
-        elif len(key_bytes) > 32:
-            key_bytes = key_bytes[:32]
-
-        cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv), backend=default_backend())
-        decryptor = cipher.decryptor()
-        padded_content = decryptor.update(ciphertext) + decryptor.finalize()
-
-        # Unpadding (assuming standard PKCS7 style where the last byte is the padding length)
-        padding_len = padded_content[-1]
-        if padding_len < 1 or padding_len > 16:
-            # Fallback if padding looks invalid
-            return padded_content.decode("utf-8", errors="ignore")
-            
-        content = padded_content[:-padding_len]
-        return content.decode("utf-8")
+        return decrypt(encrypted_val)
     except Exception as e:
         logger.error(f"❌ Decryption failed: {e}")
         return encrypted_val

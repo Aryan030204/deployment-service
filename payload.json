@@ -1,0 +1,7 @@
+{
+  "brand_id": "test_id_123",
+  "brand_name": "Test Brand",
+  "client_id": "test_client_id_abc",
+  "client_secret": "test_secret_xyz",
+  "shop_name": "test-shop.myshopify.com"
+}

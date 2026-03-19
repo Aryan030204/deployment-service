@@ -30,7 +30,7 @@ API_VERSION = os.getenv("API_VERSION")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT", "3306")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
-PIPELINE_KEY = os.getenv("X_PIPELINE_KEY") or os.getenv("PIPELINE_AUTH_HEADER")
+PIPELINE_KEY = os.getenv("PIPELINE_AUTH_HEADER")
 
 
 def _missing_env_vars() -> list[str]:
@@ -40,7 +40,7 @@ def _missing_env_vars() -> list[str]:
         "DB_HOST": DB_HOST,
         "DB_PORT": DB_PORT,
         "DB_PASSWORD": DB_PASSWORD,
-        "X_PIPELINE_KEY/PIPELINE_AUTH_HEADER": PIPELINE_KEY,
+        "PIPELINE_AUTH_HEADER": PIPELINE_KEY,
     }
     return [name for name, value in required.items() if not value]
 
@@ -72,7 +72,7 @@ def _build_payload(data: dict) -> dict:
         "db_database": brand_name,
         "db_user": db_user,
         "db_password": DB_PASSWORD,
-        "my_sql_url": f"mysql+pymysql://{db_user}:{DB_PASSWORD}@{DB_HOST}:{db_port}/{brand_name}?charset=utf8mb4",
+        "my_sql_url": f"mysql+pymysql://{db_user}:{DB_PASSWORD}@{DB_HOST}:{db_port}/{brand_name}?charset=utf8mb4" + ("&ssl=true" if DB_HOST.lower() not in ["localhost", "127.0.0.1"] else ""),
         "app_id_mapping": app_id_mapping,
         "speed_key": speed_key,
         "created_at": now_iso,

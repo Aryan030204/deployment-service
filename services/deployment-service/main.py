@@ -1,5 +1,6 @@
 import threading
 
+from services.api_service import run as run_api_service
 from services.database_service import run as run_database_service
 from services.shopify_service import run as run_shopify_service
 from services.tenant_router_service import run as run_tenant_router_service
@@ -15,6 +16,7 @@ def main() -> None:
         threading.Thread(target=run_shopify_service, name="shopify-service"),
         threading.Thread(target=run_database_service, name="database-service"),
         threading.Thread(target=run_tenant_router_service, name="tenant-router-service"),
+        threading.Thread(target=run_api_service, name="api-service"),
     ]
 
     for worker in workers:
