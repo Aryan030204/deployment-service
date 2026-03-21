@@ -23,12 +23,13 @@ def ensure_workflow_payloads(event: dict) -> dict:
     brand_name = data.get("brand_name")
     shop_name = data.get("shop_name")
     brand_tag = str(brand_name).lower() if brand_name else ""
+    brand_name_upper = str(brand_name).upper() if brand_name else ""
 
     tenant_payload = data.get("tenant_payload") or {
-        "brand_id": brand_name,
+        "brand_id": brand_name_upper,
         "shard_id": brand_tag,
         "rds_proxy_endpoint": _env("READ_REPLICA"),
-        "database": brand_name,
+        "database": brand_name_upper,
         "db_host": _env("DB_HOST"),
         "brand_num": brand_id,
         "shop_name": shop_name,
@@ -48,7 +49,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
     db_password = _env("DB_PASSWORD")
     pipelinecreds_payload = data.get("pipelinecreds_payload") or {
         "brand_id": brand_id,
-        "brand_name": brand_name,
+        "brand_name": brand_name_upper,
         "db_host": db_host,
         "port": db_port,
         "db_password": db_password,
@@ -61,8 +62,8 @@ def ensure_workflow_payloads(event: dict) -> dict:
     "1354745": "Draft Order"
 }""",
         "brand_tag": brand_tag,
-        "db_database": brand_name,
-        "my_sql_url": f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{brand_name}?charset=utf8mb4" + ("&ssl=true" if db_host.lower() not in ["localhost", "127.0.0.1"] else ""),
+        "db_database": brand_name_upper,
+        "my_sql_url": f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{brand_name_upper}?charset=utf8mb4" + ("&ssl=true" if db_host.lower() not in ["localhost", "127.0.0.1"] else ""),
         "shop_name": shop_name,
         "speed_key": "",
     }

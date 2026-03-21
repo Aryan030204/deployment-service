@@ -118,6 +118,9 @@ def process_event(data: dict) -> bool:
         or ((data.get("tenant_payload") or {}).get("database"))
         or data.get("brand_name")
     )
+    if target_db:
+        target_db = str(target_db).upper()
+
     if not target_db:
         print("⚠️ Missing target_db_name/brand_tag/tenant_payload.database/brand_name in payload.")
         return False
@@ -132,6 +135,33 @@ def process_event(data: dict) -> bool:
         return False
 
     clone_database(source_db, target_db)
+
+    # Insert into master.brands
+    try:
+        brand_id = data.get("brand_id")
+        brand_name = data.get("brand_name")
+        if brand_id and brand_name:
+            print(f"🛠️ Updating master.brands for {brand_name} (ID: {brand_id})")
+            cnx = mysql.connector.connect(
+                host=DB_HOST,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                port=DB_PORT,
+                database=MASTER_DB,
+                ssl_disabled=False
+            )
+            cursor = cnx.cursor()
+            insert_sql = "INSERT INTO brands (id, name, db_name) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE name = IF(BINARY name != VALUES(name), VALUES(name), name), db_name = IF(BINARY db_name != VALUES(db_name), VALUES(db_name), db_name);"
+            cursor.execute(insert_sql, (brand_id, brand_name.upper(), str(target_db).upper()))
+            cnx.commit()
+            cursor.close()
+            cnx.close()
+            print(f"✅ Inserted {brand_name} into master.brands successfully.")
+        else:
+            print("⚠️ Missing brand_id or brand_name in payload for master mapping.")
+    except Exception as e:
+        print(f"❌ Error updating master.brands: {e}")
+
     return True
 
 def run():

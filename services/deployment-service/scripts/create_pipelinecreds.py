@@ -66,19 +66,20 @@ def _build_payload(data: dict) -> dict:
 }"""
     app_id_mapping = data.get("app_id_mapping") or DEFAULT_APP_ID_MAPPING
 
+    brand_name_upper = str(brand_name).upper() if brand_name else ""
     return {
         "brand_id": brand_id,
-        "brand_name": brand_name,
-        "brand_tag": brand_name.lower(),
+        "brand_name": brand_name_upper,
+        "brand_tag": str(brand_name).lower() if brand_name else "",
         "shop_name": shop_name,
         "api_version": API_VERSION,
         "access_token": access_token,
         "db_host": DB_HOST,
         "port": db_port,
-        "db_database": brand_name,
+        "db_database": brand_name_upper,
         "db_user": db_user,
         "db_password": DB_PASSWORD,
-        "my_sql_url": f"mysql+pymysql://{db_user}:{DB_PASSWORD}@{DB_HOST}:{db_port}/{brand_name}?charset=utf8mb4" + ("&ssl=true" if DB_HOST.lower() not in ["localhost", "127.0.0.1"] else ""),
+        "my_sql_url": f"mysql+pymysql://{db_user}:{DB_PASSWORD}@{DB_HOST}:{db_port}/{brand_name_upper}?charset=utf8mb4" + ("&ssl=true" if DB_HOST.lower() not in ["localhost", "127.0.0.1"] else ""),
         "app_id_mapping": app_id_mapping,
         "speed_key": speed_key,
         "created_at": now_iso,

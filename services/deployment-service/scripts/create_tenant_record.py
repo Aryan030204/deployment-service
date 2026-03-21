@@ -56,7 +56,7 @@ def _build_payload(data: dict) -> dict:
         "brand_num": brand_id,
         "shard_id": brand_name.lower(),
         "rds_proxy_endpoint": READ_REPLICA,
-        "database": brand_name,
+        "database": brand_name.upper(),
         "db_host": DB_HOST,
         "user": "admin",
         "app_id_mapping": app_id_mapping,
