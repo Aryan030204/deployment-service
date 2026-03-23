@@ -20,6 +20,7 @@ class BrandEventRequest(BaseModel):
     shop_name: str
     code: Optional[str] = None
     brand_url: Optional[str] = None
+    website_url: Optional[str] = None
 
 @app.post("/push-brand-event", status_code=status.HTTP_200_OK)
 async def push_brand_event(
