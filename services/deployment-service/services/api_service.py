@@ -1,4 +1,5 @@
 import os
+import json
 import uvicorn
 from typing import Optional
 from fastapi import FastAPI, Header, HTTPException, status
@@ -21,6 +22,7 @@ class BrandEventRequest(BaseModel):
     code: Optional[str] = None
     brand_url: Optional[str] = None
     website_url: Optional[str] = None
+    app_id_mapping: Optional[dict] = None
 
 @app.post("/push-brand-event", status_code=status.HTTP_200_OK)
 async def push_brand_event(
@@ -65,6 +67,14 @@ async def push_brand_event(
         if request.brand_url:
             payload["brand_url"] = request.brand_url
             logger.info(f"📝 Appending brand_url to payload: {request.brand_url}")
+
+        if request.website_url:
+            payload["website_url"] = request.website_url
+            logger.info(f"📝 Appending website_url to payload: {request.website_url}")
+
+        if request.app_id_mapping:
+            payload["app_id_mapping"] = json.dumps(request.app_id_mapping)
+            logger.info(f"📝 Appending custom app_id_mapping to payload: {payload['app_id_mapping']}")
         
         # 4. Publish to Kafka
         publish_brand_event(payload)

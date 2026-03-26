@@ -97,8 +97,8 @@ def process_event(data: dict) -> bool:
     shop_name = data.get("shop_name")
     access_token = data.get("access_token")
 
-    # Generate dynamic App ID mapping if possible
-    if shop_name and access_token:
+    # Generate dynamic App ID mapping if NOT already present and possible
+    if not data.get("app_id_mapping") and shop_name and access_token:
         dynamic_mapping = get_dynamic_app_id_mapping(shop_name, access_token, brand_name)
         data["app_id_mapping"] = dynamic_mapping
 
