@@ -64,6 +64,7 @@ def _build_payload(data: dict) -> dict:
     "580111": "Online Store",
     "1354745": "Draft Order"
 }"""
+    # Use mapping from event data (generated in tenant step) or fallback to default
     app_id_mapping = data.get("app_id_mapping") or DEFAULT_APP_ID_MAPPING
 
     brand_name_upper = str(brand_name).upper() if brand_name else ""

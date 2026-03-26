@@ -40,8 +40,15 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "port": 3306,
         "user": "admin",
         "password": _env("DB_PASSWORD"),
-        "app_id_mapping": "",
+        "app_id_mapping": data.get("app_id_mapping") or "",
     }
+
+    DEFAULT_APP_ID_MAPPING = """{
+    "238372913153": "GoKwik",
+    "580111": "Online Store",
+    "1354745": "Draft Order"
+}"""
+    app_id_mapping_val = data.get("app_id_mapping") or DEFAULT_APP_ID_MAPPING
 
     db_user = "admin"
     db_host = _env("DB_HOST")
@@ -56,11 +63,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "db_user": db_user,
         "access_token": "",
         "api_version": _env("API_VERSION"),
-        "app_id_mapping": """{
-    "238372913153": "GoKwik",
-    "580111": "Online Store",
-    "1354745": "Draft Order"
-}""",
+        "app_id_mapping": app_id_mapping_val,
         "brand_tag": brand_tag,
         "db_database": brand_name_upper,
         "my_sql_url": f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{brand_name_upper}?charset=utf8mb4" + ("&ssl=true" if db_host.lower() not in ["localhost", "127.0.0.1"] else ""),

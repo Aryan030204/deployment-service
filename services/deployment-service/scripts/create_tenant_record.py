@@ -90,9 +90,19 @@ def create_tenant_record(payload: dict) -> bool:
     return False
 
 
+from scripts.shopify_utils import get_dynamic_app_id_mapping
+
 def process_event(data: dict) -> bool:
-    tenant_payload = data.get("tenant_payload") or _build_payload(data)
     brand_name = data.get("brand_name")
+    shop_name = data.get("shop_name")
+    access_token = data.get("access_token")
+
+    # Generate dynamic App ID mapping if possible
+    if shop_name and access_token:
+        dynamic_mapping = get_dynamic_app_id_mapping(shop_name, access_token, brand_name)
+        data["app_id_mapping"] = dynamic_mapping
+
+    tenant_payload = data.get("tenant_payload") or _build_payload(data)
     if not tenant_payload.get("brand_num") or not tenant_payload.get("brand_id") or not tenant_payload.get("shop_name"):
         print("⚠️ Missing required fields for tenant payload.")
         return False
