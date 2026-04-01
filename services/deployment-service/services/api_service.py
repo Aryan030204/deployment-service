@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from kafka_client.producer import publish_brand_event
 from shared.utils.encryption import encrypt
 from shared.utils.logger import get_logger
+from scripts.delete_tenant_logic import delete_tenant_logic
 
 logger = get_logger("deployment-service.api")
 
@@ -84,6 +85,44 @@ async def push_brand_event(
 
     except Exception as e:
         logger.exception("Failed to process brand event")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error: {str(e)}"
+        )
+
+@app.delete("/tenant/{brand_id}", status_code=status.HTTP_200_OK)
+async def delete_tenant_endpoint(
+    brand_id: int,
+    x_pipeline_key: str = Header(None, alias="x-pipeline-key")
+):
+    # 1. Validate Header
+    required_key = os.getenv("PIPELINE_AUTH_HEADER")
+    if not required_key:
+        logger.error("PIPELINE_AUTH_HEADER environment variable is not set")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server configuration error: PIPELINE_AUTH_HEADER is missing"
+        )
+        
+    if x_pipeline_key != required_key:
+        logger.warning("Unauthorized access attempt with invalid pipeline key")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid x-pipeline-key"
+        )
+
+    try:
+        success, message = delete_tenant_logic(brand_id)
+        if not success:
+            if "not found" in message.lower():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=message)
+            
+        return {"status": "success", "message": f"Tenant {brand_id} deleted successfully."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Internal error during deletion of tenant {brand_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(e)}"
