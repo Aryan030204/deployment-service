@@ -3662,9 +3662,58 @@ def process_single_brand(brand_index: int):
 
 
 
-# Kafka consumer code removed.
-pass
+
+# ---------------------------
+# Backfill Execution Logic
+# ---------------------------
+_BACKFILL_INITIALIZED = False
+
+def _initialize_backfill_runtime() -> bool:
+    global _BACKFILL_INITIALIZED, BACKFILL_MODE, BACKFILL_START_IST, BACKFILL_END_IST
+    if _BACKFILL_INITIALIZED:
+        return True
+
+    initialize_brand_configs()
+    if not active_brand_indices:
+        print("❌ No active brands initialized.")
+        return False
+
+    yesterday = now_ist() - timedelta(days=1)
+    start_dt = yesterday - timedelta(days=60)
+    backfill_start = start_dt.strftime("%Y-%m-%d")
+    backfill_end = yesterday.strftime("%Y-%m-%d")
+
+    BACKFILL_MODE = True
+    BACKFILL_START_IST = _parse_backfill_dt(backfill_start)
+    BACKFILL_END_IST = _parse_backfill_dt(backfill_end)
+
+    if not BACKFILL_START_IST or not BACKFILL_END_IST:
+        print("❌ Failed to parse backfill dates.")
+        return False
+
+    _BACKFILL_INITIALIZED = True
+    return True
+
+def process_event(data: dict) -> bool:
+    brand_tag = data.get("brand_tag") or data.get("brand_name", "").lower()
+    if not brand_tag:
+        print("⚠️ Missing brand_tag/brand_name in payload.")
+        return False
+
+    if not _initialize_backfill_runtime():
+        return False
+
+    global BACKFILL_BRAND_INDICES
+    brand_idx = brand_tag_to_index_map.get(str(brand_tag).lower())
+    if brand_idx is None:
+        print(f"❌ Brand tag '{brand_tag}' not found in active brands: {list(brand_tag_to_index_map.keys())}")
+        return False
+
+    BACKFILL_BRAND_INDICES = {brand_idx}
+    process_single_brand(brand_idx)
+    print(f"✅ Backfill completed for {brand_tag}")
+    return True
 
 if __name__ == "__main__":
-    # run() removed.
+    # Integration only, standalone run() removed.
     pass
