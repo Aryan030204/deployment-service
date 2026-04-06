@@ -7,22 +7,17 @@ performs the OAuth authorization flow, and returns the access_token.
 
 import os
 import sys
-import json
-import base64
 import requests
 from urllib.parse import urlparse, parse_qs
 
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
-
-from confluent_kafka import Consumer
+# from confluent_kafka import Consumer (Removed)
 
 # Add config path for settings
 service_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if service_dir not in sys.path:
     sys.path.insert(0, service_dir)
 
-from config.settings import KAFKA_BROKER, KAFKA_TOPIC
+# KAFKA_BROKER and KAFKA_TOPIC removed
 
 # Load .env from root
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -89,7 +84,7 @@ def generate_access_token(shop_name: str, client_id: str, client_secret: str, co
             code = params.get("code", [None])[0]
 
             if not code:
-                logger.error(f"❌ 'code' param not found in redirect URL")
+                logger.error("❌ 'code' param not found in redirect URL")
                 return None
 
             logger.info(f"✅ Authorization code received: {code[:8]}...")
@@ -147,49 +142,11 @@ def process_event(data: dict) -> str | None:
 
 
 # ---------------------------
-# Kafka Consumer
+# Kafka Consumer (REMOVED)
 # ---------------------------
-def run():
-    print("🚀 Starting Access Token Generator Consumer")
-
-    consumer = Consumer(
-        {
-            "bootstrap.servers": KAFKA_BROKER,
-            "group.id": "access-token-service-group",
-            "auto.offset.reset": "earliest",
-        }
-    )
-    consumer.subscribe([KAFKA_TOPIC])
-    print(f"📡 Subscribed to Kafka Topic: {KAFKA_TOPIC}")
-
-    try:
-        while True:
-            message = consumer.poll(1.0)
-            if message is None:
-                continue
-            if message.error():
-                print(f"Kafka error: {message.error()}")
-                continue
-
-            try:
-                payload = message.value().decode("utf-8")
-                print(f"📩 Received Event: {payload}")
-
-                data = json.loads(payload)
-                access_token = process_event(data)
-                shop_name = data.get("shop_name")
-
-                if access_token:
-                    print(f"🎉 Final Access Token for {shop_name}: {access_token}")
-                else:
-                    print(f"❌ Failed to generate access token for {shop_name}")
-
-            except Exception as e:
-                print(f"❌ Error processing message: {e}")
-
-    finally:
-        consumer.close()
+# Kafka consumer logic was removed in favor of a centralized orchestrator.
 
 
 if __name__ == "__main__":
-    run()
+    # run() logic removed.
+    pass

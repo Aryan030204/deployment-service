@@ -5,21 +5,13 @@ Replicates Target DB from Source DB with exact schemas tables dynamically based 
 """
 
 import os
-import sys
-import json
 import mysql.connector
-from confluent_kafka import Consumer
+# from confluent_kafka import Consumer (Removed)
 
-# Add config path for settings
-service_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if service_dir not in sys.path:
-    sys.path.insert(0, service_dir)
-
-from config.settings import KAFKA_BROKER, KAFKA_TOPIC
+from dotenv import load_dotenv
 
 # Load .env relative from root
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-from dotenv import load_dotenv
 load_dotenv(os.path.join(root_dir, ".env"))
 
 # DB Connection for creation setup (requires Create/Select permissions)
@@ -164,40 +156,9 @@ def process_event(data: dict) -> bool:
 
     return True
 
-def run():
-    print("🚀 Starting Database Clone Consumer")
-    
-    consumer = Consumer(
-        {
-            "bootstrap.servers": KAFKA_BROKER,
-            "group.id": "clone-database-service-group",
-            "auto.offset.reset": "earliest",
-        }
-    )
-    consumer.subscribe([KAFKA_TOPIC])
-    print(f"📡 Subscribed to Kafka Topic: {KAFKA_TOPIC}")
-
-    try:
-        while True:
-            message = consumer.poll(1.0)
-            if message is None:
-                continue
-            if message.error():
-                print(f"Kafka error: {message.error()}")
-                continue
-
-            try:
-                payload = message.value().decode("utf-8")
-                print(f"📩 Received Event: {payload}")
-                
-                data = json.loads(payload)
-                process_event(data)
-
-            except Exception as e:
-                print(f"❌ Error processing message: {e}")
-
-    finally:
-        consumer.close()
+# Kafka Consumer logic was removed.
+pass
 
 if __name__ == "__main__":
-    run()
+    # run() logic removed.
+    pass

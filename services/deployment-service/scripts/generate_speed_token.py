@@ -8,14 +8,13 @@ import os
 import sys
 import json
 import requests
-from confluent_kafka import Consumer
 
 # Add config path for settings
 service_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if service_dir not in sys.path:
     sys.path.insert(0, service_dir)
 
-from config.settings import KAFKA_BROKER, KAFKA_TOPIC
+# KAFKA_BROKER and KAFKA_TOPIC removed
 
 # Load .env from root
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -110,54 +109,10 @@ def process_event(data: dict) -> str | None:
     return generate_speed_key(brand_name)
 
 
-def run():
-    print("🚀 Starting Speed Token Generator Consumer")
-
-    missing_env = _missing_env_vars()
-    if missing_env:
-        print(f"❌ Missing required env vars: {', '.join(missing_env)}")
-        return
-
-    consumer = Consumer(
-        {
-            "bootstrap.servers": KAFKA_BROKER,
-            "group.id": "speed-token-service-group",
-            "auto.offset.reset": "earliest",
-        }
-    )
-    consumer.subscribe([KAFKA_TOPIC])
-    print(f"📡 Subscribed to Kafka Topic: {KAFKA_TOPIC}")
-
-    try:
-        while True:
-            message = consumer.poll(1.0)
-            if message is None:
-                continue
-            if message.error():
-                print(f"Kafka error: {message.error()}")
-                continue
-
-            try:
-                raw_payload = message.value().decode("utf-8")
-                print(f"📩 Received Event: {raw_payload}")
-
-                data = json.loads(raw_payload)
-                brand_name = data.get("brand_name")
-                plain_key = process_event(data)
-                if plain_key:
-                    print(f"✅ Speed token generated for {brand_name}: {plain_key}")
-                else:
-                    print(f"❌ Failed to generate speed token for {brand_name}")
-
-            except json.JSONDecodeError as exc:
-                print(f"❌ Invalid JSON payload: {exc}")
-            except requests.RequestException as exc:
-                print(f"❌ Speed token API request error: {exc}")
-            except Exception as exc:
-                print(f"❌ Error processing message: {exc}")
-    finally:
-        consumer.close()
+# Kafka Consumer logic removed.
+pass
 
 
 if __name__ == "__main__":
-    run()
+    # run() removed.
+    pass
