@@ -1,4 +1,7 @@
+import os
+import json
 import time
+import requests
 from typing import Any, Dict
 
 from shared.utils.logger import get_logger
@@ -26,82 +29,160 @@ from scripts.backfill_data import process_event as process_backfill
 
 logger = get_logger("deployment-service.orchestrator")
 
+def _send_external_log(brand_id: str, brand_name: str, message: str) -> None:
+    """Helper to send logs to external endpoints specified in LOGS_URL."""
+    try:
+        logs_url_str = os.getenv("LOGS_URL", "[]")
+        urls = json.loads(logs_url_str)
+        auth_header = os.getenv("PIPELINE_AUTH_HEADER", "")
+        
+        if not isinstance(urls, list):
+            return
+
+        payload = {
+            "brand_id": brand_id,
+            "brand_name": brand_name,
+            "log": message
+        }
+        headers = {
+            "x-pipeline-key": auth_header,
+            "Content-Type": "application/json"
+        }
+
+        for url in urls:
+            try:
+                requests.post(url, json=payload, headers=headers, timeout=5)
+            except Exception as e:
+                logger.error(f"Failed to send log to {url}: {e}")
+    except Exception as e:
+        logger.error(f"Error in _send_external_log: {e}")
+
 def run_pipeline(initial_data: Dict[str, Any]) -> None:
     """
     Main orchestrator that runs the entire brand onboarding pipeline in sequence.
-    Prints status messages to the console for tracking.
+    Prints status messages to console AND sends to external logging URLs.
     """
+    brand_id = str(initial_data.get("brand_id", "unknown"))
     brand_name = initial_data.get("brand_name", "Unknown Brand")
-    print(f"\n🚀 [ORCHESTRATOR] Starting pipeline for {brand_name}")
+    
+    start_msg = f"🚀 [ORCHESTRATOR] Starting pipeline for {brand_name}"
+    print(f"\n{start_msg}")
+    _send_external_log(brand_id, brand_name, start_msg)
     
     try:
         # Step 1: Shopify Access Token
-        print("📦 [ORCHESTRATOR] Step 1/6: Generating Shopify Access Token...")
+        step1_msg = "📦 [ORCHESTRATOR] Step 1/6: Generating Shopify Access Token..."
+        print(step1_msg)
+        _send_external_log(brand_id, brand_name, step1_msg)
+        
         data = ensure_workflow_payloads(initial_data)
         data["state"] = STATE_INITIATED
         
         access_token = process_access_token(data)
         if not access_token:
-            print("❌ [ORCHESTRATOR] Failed at Step 1: Access token generation failed.")
+            err_msg = "❌ [ORCHESTRATOR] Failed at Step 1: Access token generation failed."
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
             return
         
         data = set_access_token(data, access_token)
         data["state"] = STATE_ACCESS_TOKEN_GENERATED
-        print("✅ [ORCHESTRATOR] Step 1 Complete: Access token generated.")
+        ok_msg = "✅ [ORCHESTRATOR] Step 1 Complete: Access token generated."
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
 
         # Step 2: Clone Database
-        print("📦 [ORCHESTRATOR] Step 2/6: Cloning Database...")
+        step2_msg = "📦 [ORCHESTRATOR] Step 2/6: Cloning Database..."
+        print(step2_msg)
+        _send_external_log(brand_id, brand_name, step2_msg)
+        
         if not process_clone_db(data):
-            print("❌ [ORCHESTRATOR] Failed at Step 2: Database cloning failed.")
+            err_msg = "❌ [ORCHESTRATOR] Failed at Step 2: Database cloning failed."
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
             return
         
         data["state"] = STATE_DATABASE_CREATED
-        print("✅ [ORCHESTRATOR] Step 2 Complete: Database cloned.")
+        ok_msg = "✅ [ORCHESTRATOR] Step 2 Complete: Database cloned."
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
 
         # Step 3: Generate Speed Token
-        print("📦 [ORCHESTRATOR] Step 3/6: Generating Speed Token...")
+        step3_msg = "📦 [ORCHESTRATOR] Step 3/6: Generating Speed Token..."
+        print(step3_msg)
+        _send_external_log(brand_id, brand_name, step3_msg)
+        
         speed_key = process_speed_token(data)
         if not speed_key:
-            print("❌ [ORCHESTRATOR] Failed at Step 3: Speed token generation failed.")
+            err_msg = "❌ [ORCHESTRATOR] Failed at Step 3: Speed token generation failed."
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
             return
         
         data = set_speed_key(data, speed_key)
         data["state"] = STATE_SPEED_KEY_GENERATED
-        print("✅ [ORCHESTRATOR] Step 3 Complete: Speed token generated.")
+        ok_msg = "✅ [ORCHESTRATOR] Step 3 Complete: Speed token generated."
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
 
         # Step 4: Create Tenant Record
-        print("📦 [ORCHESTRATOR] Step 4/6: Creating Tenant Record...")
+        step4_msg = "📦 [ORCHESTRATOR] Step 4/6: Creating Tenant Record..."
+        print(step4_msg)
+        _send_external_log(brand_id, brand_name, step4_msg)
+        
         if not process_tenant_record(data):
-            print("❌ [ORCHESTRATOR] Failed at Step 4: Tenant record creation failed.")
+            err_msg = "❌ [ORCHESTRATOR] Failed at Step 4: Tenant record creation failed."
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
             return
         
         data["state"] = STATE_TENANT_RECORD_CREATED
-        print("✅ [ORCHESTRATOR] Step 4 Complete: Tenant record created.")
+        ok_msg = "✅ [ORCHESTRATOR] Step 4 Complete: Tenant record created."
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
 
         # Step 5: Create Pipeline Credentials
-        print("📦 [ORCHESTRATOR] Step 5/6: Creating Pipeline Credentials...")
+        step5_msg = "📦 [ORCHESTRATOR] Step 5/6: Creating Pipeline Credentials..."
+        print(step5_msg)
+        _send_external_log(brand_id, brand_name, step5_msg)
+        
         if not process_pipelinecreds(data):
-            print("❌ [ORCHESTRATOR] Failed at Step 5: Pipeline credentials creation failed.")
+            err_msg = "❌ [ORCHESTRATOR] Failed at Step 5: Pipeline credentials creation failed."
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
             return
         
         data["state"] = STATE_PIPELINE_CREDENTIALS_CREATED
-        print("✅ [ORCHESTRATOR] Step 5 Complete: Pipeline credentials created.")
+        ok_msg = "✅ [ORCHESTRATOR] Step 5 Complete: Pipeline credentials created."
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
 
         # Step 6: Data Backfill
-        print("📦 [ORCHESTRATOR] Step 6/6: Starting Data Backfill...")
+        step6_msg = "📦 [ORCHESTRATOR] Step 6/6: Starting Data Backfill..."
+        print(step6_msg)
+        _send_external_log(brand_id, brand_name, step6_msg)
+        
         if not process_backfill(data):
-            print("❌ [ORCHESTRATOR] Failed at Step 6: Data backfill failed.")
+            err_msg = "❌ [ORCHESTRATOR] Failed at Step 6: Data backfill failed."
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
             return
         
         data["state"] = STATE_DATA_BACKFILL_COMPLETED
-        print("✅ [ORCHESTRATOR] Step 6 Complete: Data backfill finished.")
+        ok_msg = "✅ [ORCHESTRATOR] Step 6 Complete: Data backfill finished."
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
 
         # Final State
         time.sleep(2) 
         data["state"] = STATE_TENANT_ADDED
-        print(f"🎉 [ORCHESTRATOR] Pipeline Successfully Completed for {brand_name}!")
+        final_msg = f"🎉 [ORCHESTRATOR] Pipeline Successfully Completed for {brand_name}!"
+        print(final_msg)
+        _send_external_log(brand_id, brand_name, final_msg)
         logger.info(f"Pipeline successfully completed for {brand_name}")
 
     except Exception as e:
-        print(f"🔥 [ORCHESTRATOR] Critical Error in pipeline for {brand_name}: {e}")
+        err_msg = f"🔥 [ORCHESTRATOR] Critical Error in pipeline for {brand_name}: {e}"
+        print(err_msg)
+        _send_external_log(brand_id, brand_name, err_msg)
         logger.exception(f"Pipeline failed for {brand_name}")
