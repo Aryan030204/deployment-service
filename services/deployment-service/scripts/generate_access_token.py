@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Standalone Shopify OAuth Access Token Generator
-Listens on Kafka for brand events containing encrypted client_id and client_secret,
-performs the OAuth authorization flow, and returns the access_token.
+Handles the OAuth authorization flow and returns the access_token.
 """
 
 import os
@@ -10,14 +9,12 @@ import sys
 import requests
 from urllib.parse import urlparse, parse_qs
 
-# from confluent_kafka import Consumer (Removed)
-
 # Add config path for settings
 service_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if service_dir not in sys.path:
     sys.path.insert(0, service_dir)
 
-# KAFKA_BROKER and KAFKA_TOPIC removed
+# Load .env from root
 
 # Load .env from root
 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))

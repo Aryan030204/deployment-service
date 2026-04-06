@@ -1,7 +1,6 @@
 import os
 import mysql.connector
 from pymongo import MongoClient
-from kafka_client.producer import publish_brand_event
 from shared.utils.logger import get_logger
 
 logger = get_logger("deployment-service.delete-tenant")
@@ -43,8 +42,8 @@ def delete_tenant_logic(brand_id: int):
         db_name = brand['db_name']
         logger.info(f"🔍 Found brand: {brand_name}, DB: {db_name}")
 
-        # Start Kafka Notification
-        publish_brand_event({"brand_id": brand_id, "brand_name": brand_name, "state": "deleting_started"})
+        # Notification: Deletion started
+        logger.info(f"📁 Logic: Deletion started for {brand_name}")
 
         # 2. Drop Database and Delete from master.brands
         logger.info(f"🗑️ Dropping database {db_name}...")
@@ -57,7 +56,7 @@ def delete_tenant_logic(brand_id: int):
         cursor.execute("DELETE FROM brands WHERE id = %s", (brand_id,))
         mysql_conn.commit()
 
-        publish_brand_event({"brand_id": brand_id, "brand_name": brand_name, "state": "mysql_deletion_completed"})
+        logger.info(f"✅ Logic: MySQL deletion completed for {brand_name}")
 
         # 3. MongoDB Deletion
         logger.info("🗑️ Connecting to MongoDB clusters...")
@@ -103,14 +102,14 @@ def delete_tenant_logic(brand_id: int):
             else:
                 logger.warning("⚠️ SPEED_DB_URI not found in environment")
 
-            publish_brand_event({"brand_id": brand_id, "brand_name": brand_name, "state": "mongo_deletion_completed"})
+            logger.info(f"✅ Logic: MongoDB deletion completed for {brand_name}")
         except Exception as e:
             logger.error(f"⚠️ Error during MongoDB deletion: {e}")
             # We continue even if Mongo fails so MySQL state is consistent
 
         # 4. Final Success Notification
         logger.info(f"✅ Deletion successful for brand ID: {brand_id}")
-        publish_brand_event({"brand_id": brand_id, "brand_name": brand_name, "state": "deleting_success"})
+        logger.info(f"🎉 Logic: Deletion success for {brand_name}")
         return True, "Success"
 
     except Exception as e:

@@ -6,7 +6,6 @@ Replicates Target DB from Source DB with exact schemas tables dynamically based 
 
 import os
 import mysql.connector
-# from confluent_kafka import Consumer (Removed)
 
 from dotenv import load_dotenv
 
