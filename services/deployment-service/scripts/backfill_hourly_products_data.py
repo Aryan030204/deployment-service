@@ -22,6 +22,7 @@ if root_dir not in sys.path:
 
 from shared.utils.encryption import decrypt
 from dotenv import load_dotenv
+from scripts.backfill_common import build_inclusive_date_range, get_onboarding_backfill_window
 
 # Load .env
 load_dotenv(os.path.join(root_dir, ".env"))
@@ -58,14 +59,8 @@ def decrypt_value(val: str) -> str:
         logger.error(f"❌ Decryption failed: {e}")
         return val
 
-def get_date_range() -> List[str]:
-    """Returns last 7 days (today exclusive) as YYYY-MM-DD."""
-    dates = []
-    today = datetime.now()
-    for i in range(1, 8):
-        dt = today - timedelta(days=i)
-        dates.append(dt.strftime("%Y-%m-%d"))
-    return sorted(dates)
+def get_date_range(start_ymd: str, end_ymd: str) -> List[str]:
+    return build_inclusive_date_range(start_ymd, end_ymd)
 
 # --------------------------
 # Brand Discovery
@@ -310,10 +305,12 @@ def fetch_hourly_sessions(brand_info, date_str):
 # Orchestration
 # --------------------------
 
-def process_brand(brand_id, brand_tag):
+def process_brand(brand_id: str, brand_tag: str, start_ymd: str, end_ymd: str) -> bool:
     logger.info(f"🚀 Processing brand: {brand_tag} ({brand_id})")
     config = fetch_brand_config(brand_id)
-    if not config: return
+    if not config:
+        logger.error(f"❌ [{brand_tag}] Missing brand config for brand_id={brand_id}")
+        return False
     
     db_pass = decrypt_value(config['db_password'])
     db_host = config['db_host']
@@ -333,7 +330,7 @@ def process_brand(brand_id, brand_tag):
         logger.info(f"[{brand_tag}] Syncing product handles...")
         sync_products(config, conn)
         
-        dates = get_date_range()
+        dates = get_date_range(start_ymd, end_ymd)
         for date_str in dates:
             logger.info(f"[{brand_tag}] Backfilling date: {date_str}...")
             
@@ -415,12 +412,35 @@ def process_brand(brand_id, brand_tag):
             conn.commit()
             cursor.close()
             logger.info(f"✅ [{brand_tag}] Completed {date_str}")
-            
+        return True
     except Exception as e:
         logger.error(f"❌ [{brand_tag}] Failed: {e}")
         traceback.print_exc()
+        return False
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
+
+
+def process_event(data: dict) -> bool:
+    brand_id = str(data.get("brand_id") or "").strip()
+    brand_tag = str(data.get("brand_tag") or data.get("brand_name") or "").strip().lower()
+
+    if not brand_id:
+        logger.error("❌ Missing brand_id in onboarding payload for hourly products backfill.")
+        return False
+    if not brand_tag:
+        logger.error("❌ Missing brand_tag/brand_name in onboarding payload for hourly products backfill.")
+        return False
+
+    start_ymd, end_ymd = get_onboarding_backfill_window()
+    logger.info(
+        f"📦 [{brand_tag}] Starting hourly product backfill for onboarding window {start_ymd} -> {end_ymd}"
+    )
+    ok = process_brand(brand_id, brand_tag, start_ymd, end_ymd)
+    if ok:
+        logger.info(f"✅ [{brand_tag}] Hourly product backfill completed.")
+    return ok
 
 def main():
     logger.info("⚡ Starting Hourly Product Performance Backfill")
@@ -430,8 +450,12 @@ def main():
         return
         
     logger.info(f"📍 Found {len(brands)} brands. Starting workers (concurrency={CONCURRENCY}).")
+    start_ymd, end_ymd = get_onboarding_backfill_window()
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-        futures = [executor.submit(process_brand, bid, tag) for bid, tag in brands.items()]
+        futures = [
+            executor.submit(process_brand, bid, tag, start_ymd, end_ymd)
+            for bid, tag in brands.items()
+        ]
         for future in as_completed(futures):
             future.result()
             

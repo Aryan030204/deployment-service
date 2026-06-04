@@ -23,6 +23,9 @@ load_dotenv()
 import asyncio
 import aiohttp
 import requests
+from scripts.backfill_common import get_onboarding_backfill_window
+from scripts.backfill_hourly_products_data import process_event as process_hourly_products_backfill
+from scripts.backfill_utm_aggregation import process_event as process_utm_aggregation_backfill
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from urllib.parse import urlparse, parse_qs
@@ -3678,10 +3681,7 @@ def _initialize_backfill_runtime() -> bool:
         print("❌ No active brands initialized.")
         return False
 
-    yesterday = now_ist() - timedelta(days=1)
-    start_dt = yesterday - timedelta(days=60)
-    backfill_start = start_dt.strftime("%Y-%m-%d")
-    backfill_end = yesterday.strftime("%Y-%m-%d")
+    backfill_start, backfill_end = get_onboarding_backfill_window()
 
     BACKFILL_MODE = True
     BACKFILL_START_IST = _parse_backfill_dt(backfill_start)
@@ -3694,6 +3694,19 @@ def _initialize_backfill_runtime() -> bool:
     _BACKFILL_INITIALIZED = True
     return True
 
+
+def _run_main_backfill_for_brand(brand_tag: str) -> bool:
+    global BACKFILL_BRAND_INDICES
+
+    brand_idx = brand_tag_to_index_map.get(str(brand_tag).lower())
+    if brand_idx is None:
+        print(f"âŒ Brand tag '{brand_tag}' not found in active brands: {list(brand_tag_to_index_map.keys())}")
+        return False
+
+    BACKFILL_BRAND_INDICES = {brand_idx}
+    process_single_brand(brand_idx)
+    return True
+
 def process_event(data: dict) -> bool:
     brand_tag = data.get("brand_tag") or data.get("brand_name", "").lower()
     if not brand_tag:
@@ -3703,14 +3716,32 @@ def process_event(data: dict) -> bool:
     if not _initialize_backfill_runtime():
         return False
 
-    global BACKFILL_BRAND_INDICES
-    brand_idx = brand_tag_to_index_map.get(str(brand_tag).lower())
-    if brand_idx is None:
-        print(f"❌ Brand tag '{brand_tag}' not found in active brands: {list(brand_tag_to_index_map.keys())}")
+    start_ymd, end_ymd = get_onboarding_backfill_window()
+    print(f"📦 [BACKFILL] Coordinating onboarding backfill for {brand_tag} ({start_ymd} -> {end_ymd})")
+
+    try:
+        print(f"📦 [BACKFILL] Substep 1/3: Main data backfill for {brand_tag}")
+        if not _run_main_backfill_for_brand(brand_tag):
+            print(f"❌ [BACKFILL] Main data backfill failed for {brand_tag}")
+            return False
+        print(f"✅ [BACKFILL] Substep 1/3 complete for {brand_tag}")
+
+        print(f"📦 [BACKFILL] Substep 2/3: Hourly product backfill for {brand_tag}")
+        if not process_hourly_products_backfill(data):
+            print(f"❌ [BACKFILL] Hourly product backfill failed for {brand_tag}")
+            return False
+        print(f"✅ [BACKFILL] Substep 2/3 complete for {brand_tag}")
+
+        print(f"📦 [BACKFILL] Substep 3/3: UTM aggregation backfill for {brand_tag}")
+        if not process_utm_aggregation_backfill(data):
+            print(f"❌ [BACKFILL] UTM aggregation backfill failed for {brand_tag}")
+            return False
+        print(f"✅ [BACKFILL] Substep 3/3 complete for {brand_tag}")
+    except Exception as err:
+        print(f"❌ [BACKFILL] Coordinated onboarding backfill failed for {brand_tag}: {err}")
+        logger.exception("Coordinated onboarding backfill failed")
         return False
 
-    BACKFILL_BRAND_INDICES = {brand_idx}
-    process_single_brand(brand_idx)
     print(f"✅ Backfill completed for {brand_tag}")
     return True
 
