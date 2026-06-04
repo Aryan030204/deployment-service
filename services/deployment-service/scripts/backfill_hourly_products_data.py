@@ -22,7 +22,7 @@ if root_dir not in sys.path:
 
 from shared.utils.encryption import decrypt
 from dotenv import load_dotenv
-from scripts.backfill_common import build_inclusive_date_range, get_onboarding_backfill_window
+from scripts.backfill_common import build_inclusive_date_range, get_hourly_products_backfill_window
 
 # Load .env
 load_dotenv(os.path.join(root_dir, ".env"))
@@ -433,9 +433,9 @@ def process_event(data: dict) -> bool:
         logger.error("❌ Missing brand_tag/brand_name in onboarding payload for hourly products backfill.")
         return False
 
-    start_ymd, end_ymd = get_onboarding_backfill_window()
+    start_ymd, end_ymd = get_hourly_products_backfill_window()
     logger.info(
-        f"📦 [{brand_tag}] Starting hourly product backfill for onboarding window {start_ymd} -> {end_ymd}"
+        f"📦 [{brand_tag}] Starting hourly product backfill for configured window {start_ymd} -> {end_ymd}"
     )
     ok = process_brand(brand_id, brand_tag, start_ymd, end_ymd)
     if ok:
@@ -450,7 +450,7 @@ def main():
         return
         
     logger.info(f"📍 Found {len(brands)} brands. Starting workers (concurrency={CONCURRENCY}).")
-    start_ymd, end_ymd = get_onboarding_backfill_window()
+    start_ymd, end_ymd = get_hourly_products_backfill_window()
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
         futures = [
             executor.submit(process_brand, bid, tag, start_ymd, end_ymd)

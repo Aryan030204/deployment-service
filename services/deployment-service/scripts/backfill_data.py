@@ -24,6 +24,7 @@ import asyncio
 import aiohttp
 import requests
 from scripts.backfill_common import get_onboarding_backfill_window
+from scripts.backfill_products_pipeline_data import process_event as process_products_pipeline_backfill
 from scripts.backfill_hourly_products_data import process_event as process_hourly_products_backfill
 from scripts.backfill_utm_aggregation import process_event as process_utm_aggregation_backfill
 from requests.adapters import HTTPAdapter
@@ -3720,23 +3721,29 @@ def process_event(data: dict) -> bool:
     print(f"📦 [BACKFILL] Coordinating onboarding backfill for {brand_tag} ({start_ymd} -> {end_ymd})")
 
     try:
-        print(f"📦 [BACKFILL] Substep 1/3: Main data backfill for {brand_tag}")
+        print(f"📦 [BACKFILL] Substep 1/4: Main data backfill for {brand_tag}")
         if not _run_main_backfill_for_brand(brand_tag):
             print(f"❌ [BACKFILL] Main data backfill failed for {brand_tag}")
             return False
-        print(f"✅ [BACKFILL] Substep 1/3 complete for {brand_tag}")
+        print(f"✅ [BACKFILL] Substep 1/4 complete for {brand_tag}")
 
-        print(f"📦 [BACKFILL] Substep 2/3: Hourly product backfill for {brand_tag}")
+        print(f"📦 [BACKFILL] Substep 2/4: Products pipeline backfill for {brand_tag}")
+        if not process_products_pipeline_backfill(data):
+            print(f"❌ [BACKFILL] Products pipeline backfill failed for {brand_tag}")
+            return False
+        print(f"✅ [BACKFILL] Substep 2/4 complete for {brand_tag}")
+
+        print(f"📦 [BACKFILL] Substep 3/4: Hourly product backfill for {brand_tag}")
         if not process_hourly_products_backfill(data):
             print(f"❌ [BACKFILL] Hourly product backfill failed for {brand_tag}")
             return False
-        print(f"✅ [BACKFILL] Substep 2/3 complete for {brand_tag}")
+        print(f"✅ [BACKFILL] Substep 3/4 complete for {brand_tag}")
 
-        print(f"📦 [BACKFILL] Substep 3/3: UTM aggregation backfill for {brand_tag}")
+        print(f"📦 [BACKFILL] Substep 4/4: UTM aggregation backfill for {brand_tag}")
         if not process_utm_aggregation_backfill(data):
             print(f"❌ [BACKFILL] UTM aggregation backfill failed for {brand_tag}")
             return False
-        print(f"✅ [BACKFILL] Substep 3/3 complete for {brand_tag}")
+        print(f"✅ [BACKFILL] Substep 4/4 complete for {brand_tag}")
     except Exception as err:
         print(f"❌ [BACKFILL] Coordinated onboarding backfill failed for {brand_tag}: {err}")
         logger.exception("Coordinated onboarding backfill failed")

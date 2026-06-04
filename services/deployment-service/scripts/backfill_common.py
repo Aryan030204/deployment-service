@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import List, Tuple
 from zoneinfo import ZoneInfo
+import os
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -16,6 +17,17 @@ def now_ist() -> datetime:
 def get_onboarding_backfill_window() -> Tuple[str, str]:
     yesterday = now_ist() - timedelta(days=1)
     start_dt = yesterday - timedelta(days=ONBOARDING_BACKFILL_LOOKBACK_DAYS)
+    return start_dt.strftime("%Y-%m-%d"), yesterday.strftime("%Y-%m-%d")
+
+
+def get_hourly_products_backfill_window() -> Tuple[str, str]:
+    yesterday = now_ist() - timedelta(days=1)
+    raw_days = str(os.getenv("PRODUCTS_PIPELINE_DATE_RANGE", "7")).strip()
+    try:
+        lookback_days = max(1, int(raw_days))
+    except ValueError:
+        lookback_days = 7
+    start_dt = yesterday - timedelta(days=lookback_days - 1)
     return start_dt.strftime("%Y-%m-%d"), yesterday.strftime("%Y-%m-%d")
 
 
