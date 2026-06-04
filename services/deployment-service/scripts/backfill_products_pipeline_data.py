@@ -57,8 +57,9 @@ def run_shopifyql_query(brand_info: Dict[str, Any], shopifyql: str, label: str) 
     token = decrypt(brand_info["access_token"])
     api_version = brand_info.get("api_version", API_VERSION)
     url = f"https://{shop_name}.myshopify.com/admin/api/{api_version}/graphql.json"
+    escaped_query = shopifyql.replace('"', '\\"')
     graphql = {
-        "query": f'query {{ shopifyqlQuery(query: "{shopifyql.replace(chr(34), r"\\\"")}") {{ tableData {{ rows columns {{ name }} }} parseErrors }} }}'
+        "query": f'query {{ shopifyqlQuery(query: "{escaped_query}") {{ tableData {{ rows columns {{ name }} }} parseErrors }} }}'
     }
 
     while True:
