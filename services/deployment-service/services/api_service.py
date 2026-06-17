@@ -2,10 +2,10 @@ import os
 import json
 import uvicorn
 from typing import Optional
-from fastapi import FastAPI, Header, HTTPException, status, BackgroundTasks
+from fastapi import FastAPI, Header, HTTPException, status
 from pydantic import BaseModel
 
-from services.orchestrator import run_pipeline
+from services.onboarding_queue import DuplicateJobError, OnboardingQueue
 from shared.utils.encryption import encrypt
 from shared.utils.logger import get_logger
 from scripts.delete_tenant_logic import delete_tenant_logic
@@ -25,10 +25,9 @@ class OnboardRequest(BaseModel):
     website_url: Optional[str] = None
     app_id_mapping: Optional[dict] = None
 
-@app.post("/tenant/onboard", status_code=status.HTTP_200_OK)
+@app.post("/tenant/onboard", status_code=status.HTTP_202_ACCEPTED)
 async def onboard_tenant(
     request: OnboardRequest,
-    background_tasks: BackgroundTasks,
     x_pipeline_key: str = Header(None, alias="x-pipeline-key")
 ):
     # 1. Validate Header
@@ -69,11 +68,28 @@ async def onboard_tenant(
         if request.app_id_mapping:
             payload["app_id_mapping"] = json.dumps(request.app_id_mapping)
         
-        # 4. Trigger Orchestrator in Background
-        logger.info(f"Triggering onboarding pipeline for {request.brand_name}")
-        background_tasks.add_task(run_pipeline, payload)
-        
-        return {"status": "success", "message": "Onboarding pipeline triggered successfully"}
+        # 4. Enqueue onboarding job
+        queue = OnboardingQueue()
+        job_id = queue.enqueue(payload)
+        logger.info(f"Queued onboarding pipeline for {request.brand_name} with job_id={job_id}")
+
+        return {
+            "status": "queued",
+            "job_id": job_id,
+            "brand_id": request.brand_id,
+            "message": "Onboarding pipeline queued successfully",
+        }
+
+    except DuplicateJobError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "status": "conflict",
+                "brand_id": request.brand_id,
+                "active_job_id": e.active_job_id,
+                "message": "An onboarding job is already queued or running for this brand",
+            },
+        )
 
     except Exception as e:
         logger.exception("Failed to trigger onboarding pipeline")

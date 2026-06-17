@@ -44,6 +44,7 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 import base64
+import queue
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -94,6 +95,87 @@ brand_id_from_config: Dict[int, int] = {}  # brand_index -> brand_id from pipeli
 db_connection_pools: Dict[int, pooling.MySQLConnectionPool] = {}
 sqlalchemy_engines: Dict[int, Any] = {}
 active_brand_indices: List[int] = []  # only brands with valid pools/engines
+
+
+def _reset_runtime_state() -> None:
+    brand_tag_to_index_map.clear()
+    brand_id_from_config.clear()
+    db_connection_pools.clear()
+    sqlalchemy_engines.clear()
+    active_brand_indices.clear()
+
+
+def _cleanup_sqlalchemy_engine(brand_index: int) -> None:
+    engine = sqlalchemy_engines.pop(brand_index, None)
+    if not engine:
+        return
+    try:
+        logger.info(f"🧹 Disposing SQLAlchemy engine for brand_index={brand_index}")
+        engine.dispose()
+        logger.info(f"✅ Disposed SQLAlchemy engine for brand_index={brand_index}")
+    except Exception as e:
+        logger.error(f"❌ Failed disposing SQLAlchemy engine for brand_index={brand_index}: {e}")
+
+
+def _cleanup_mysql_pool(brand_index: int) -> None:
+    pool = db_connection_pools.pop(brand_index, None)
+    if not pool:
+        return
+
+    queue_obj = getattr(pool, "_cnx_queue", None)
+    if queue_obj is None:
+        logger.warning(f"⚠️ No internal connection queue found for pool_{brand_index}; dropping pool reference only")
+        return
+
+    closed = 0
+    while True:
+        try:
+            cnx = queue_obj.get_nowait()
+        except queue.Empty:
+            break
+        except Exception as e:
+            logger.error(f"❌ Error draining MySQL pool for brand_index={brand_index}: {e}")
+            break
+
+        try:
+            if cnx.is_connected():
+                cnx.close()
+            closed += 1
+        except Exception as e:
+            logger.error(f"❌ Error closing pooled MySQL connection for brand_index={brand_index}: {e}")
+
+    logger.info(f"🧹 Closed {closed} pooled MySQL connections for brand_index={brand_index}")
+
+
+def cleanup_brand_runtime(brand_index: Optional[int] = None) -> None:
+    target_indices = [brand_index] if brand_index is not None else list(set(active_brand_indices))
+    if not target_indices:
+        logger.info("🧹 No active runtime state to clean up")
+    for idx in target_indices:
+        logger.info(f"🧹 Starting runtime cleanup for brand_index={idx}")
+        _cleanup_sqlalchemy_engine(idx)
+        _cleanup_mysql_pool(idx)
+        brand_id_from_config.pop(idx, None)
+        active_brand_indices[:] = [active for active in active_brand_indices if active != idx]
+
+        env_prefixes = [
+            "BRAND_NAME",
+            "SHOP_NAME",
+            "ACCESS_TOKEN",
+            "API_VERSION",
+            "BRAND_TAG",
+            "DB_DATABASE",
+            "SPEED_KEY",
+            "APP_ID_MAPPING",
+            "SHOP_CURRENCY",
+        ]
+        for prefix in env_prefixes:
+            os.environ.pop(f"{prefix}_{idx}", None)
+
+        tags_to_remove = [tag for tag, mapped_idx in brand_tag_to_index_map.items() if mapped_idx == idx]
+        for tag in tags_to_remove:
+            brand_tag_to_index_map.pop(tag, None)
+        logger.info(f"✅ Completed runtime cleanup for brand_index={idx}")
 
 # HTTP Session (requests) with pooling/retries (used for sessions API)
 http_session = requests.Session()
@@ -445,7 +527,7 @@ def fetch_brand_config(brand_id: str) -> Optional[Dict[str, Any]]:
         logger.error(f"❌ Config fetch error for {brand_id}: {e}")
         return None
 
-def initialize_brand_configs():
+def initialize_brand_configs(target_brand_id: Optional[str] = None, target_brand_tag: Optional[str] = None, target_payload: Optional[Dict[str, Any]] = None):
     import tempfile
     import certifi
     from sqlalchemy import create_engine
@@ -459,12 +541,16 @@ def initialize_brand_configs():
     logger.info("============================================================")
     logger.info("🔍 INITIALIZING PIPELINE ENVIRONMENT")
     logger.info(f"   TEST_MODE: {TEST_MODE}")
+    logger.info(f"   target_brand_id: {target_brand_id or 'ALL'}")
+    logger.info(f"   target_brand_tag: {target_brand_tag or 'ALL'}")
+    logger.info(f"   target_payload_present: {bool(target_payload)}")
     logger.info("============================================================")
+    _reset_runtime_state()
 
     # --------------------------
     # Infrastructure Setup Helper
     # --------------------------
-    def _setup_brand_infra(brand_idx, brand_name, brand_tag, db_host, db_user, db_password, db_port, db_name, shop_name, access_token, api_version, speed_key, app_map_str, ca_path, verify_cert, verify_identity):
+    def _setup_brand_infra(brand_idx, brand_name, brand_tag, db_host, db_user, db_password, db_port, db_name, shop_name, access_token, api_version, speed_key, app_map_str, shop_currency, ca_path, verify_cert, verify_identity):
         def _trunc(val: Any, length: int = 4) -> str:
             s = str(val) if val is not None else ""
             if len(s) <= length: return s
@@ -503,6 +589,7 @@ def initialize_brand_configs():
                 **db_config
             )
             db_connection_pools[brand_idx] = pool
+            logger.info(f"✅ Created MySQL pool pool_{brand_idx} with size={int(os.environ.get(f'DB_POOL_SIZE_{brand_idx}', '5'))}")
         except Exception as e:
             err_msg = str(e).lower()
             if effective_ca_path and ("ssl" in err_msg or "certificate verify failed" in err_msg):
@@ -520,6 +607,7 @@ def initialize_brand_configs():
                     )
                     db_connection_pools[brand_idx] = pool
                     effective_ca_path = None # Mark as disabled for engine too
+                    logger.info(f"✅ Created MySQL pool pool_{brand_idx} without SSL fallback")
                 except Exception as retry_e:
                     logger.error(f"❌ Pool error for {brand_name} (even without SSL): {retry_e}")
                     return
@@ -547,6 +635,7 @@ def initialize_brand_configs():
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
             sqlalchemy_engines[brand_idx] = engine
+            logger.info(f"✅ Created SQLAlchemy engine for brand_index={brand_idx} with pool_size={int(os.environ.get(f'SA_POOL_SIZE_{brand_idx}', '1'))} max_overflow={int(os.environ.get(f'SA_MAX_OVERFLOW_{brand_idx}', '0'))}")
         except Exception as e:
             err_msg = str(e).lower()
             if effective_ca_path and ("ssl" in err_msg or "certificate verify failed" in err_msg):
@@ -562,6 +651,7 @@ def initialize_brand_configs():
                     with engine.connect() as conn:
                         conn.execute(text("SELECT 1"))
                     sqlalchemy_engines[brand_idx] = engine
+                    logger.info(f"✅ Created SQLAlchemy engine for brand_index={brand_idx} without SSL fallback")
                 except Exception as retry_e:
                     logger.error(f"❌ Engine error for {brand_name} (even without SSL): {retry_e}")
                     db_connection_pools.pop(brand_idx, None)
@@ -579,9 +669,11 @@ def initialize_brand_configs():
         os.environ[f"DB_DATABASE_{brand_idx}"] = db_name
         os.environ[f"SPEED_KEY_{brand_idx}"] = speed_key
         os.environ[f"APP_ID_MAPPING_{brand_idx}"] = app_map_str
+        os.environ[f"SHOP_CURRENCY_{brand_idx}"] = (shop_currency or "").upper()
 
         brand_id_from_config[brand_idx] = brand_idx  # store brand_id from pipelinecreds document
         active_brand_indices.append(brand_idx)
+        logger.info(f"✅ Brand runtime initialized for brand_index={brand_idx}, brand_tag={brand_tag}")
 
     # --------------------------
     # TLS / CA resolution helpers
@@ -618,8 +710,11 @@ def initialize_brand_configs():
 
     if TEST_MODE:
         logger.info("🧪 [TEST_MODE] Loading local config from .env...")
-        
-        for idx_str in ACTIVE_BRAND_IDS:
+        target_ids = ACTIVE_BRAND_IDS
+        if target_brand_id:
+            target_ids = [str(target_brand_id)]
+
+        for idx_str in target_ids:
             try:
                 i = int(idx_str)
                 brand_name = os.environ.get(f"BRAND_NAME_{i}")
@@ -640,19 +735,78 @@ def initialize_brand_configs():
                 api_version = os.environ.get(f"API_VERSION_{i}", "2024-04")
                 speed_key = os.environ.get(f"SPEED_KEY_{i}", "")
                 app_map_str = os.environ.get(f"APP_ID_MAPPING_{i}", "{}")
+                shop_currency = os.environ.get(f"SHOP_CURRENCY_{i}", "")
                 
                 if not all([db_host, db_user, db_password, db_name, shop_name, access_token]):
                     logger.error(f"❌ Missing local env vars for brand index {i}")
                     continue
                 
-                _setup_brand_infra(brand_idx, brand_name, brand_tag, db_host, db_user, db_password, db_port, db_name, shop_name, access_token, api_version, speed_key, app_map_str, ca_path, verify_cert, verify_identity)
+                _setup_brand_infra(brand_idx, brand_name, brand_tag, db_host, db_user, db_password, db_port, db_name, shop_name, access_token, api_version, speed_key, app_map_str, shop_currency, ca_path, verify_cert, verify_identity)
             except Exception as e:
                 logger.error(f"❌ Local config error for {idx_str}: {e}")
                 continue
     else:
-        logger.info("📡 [PROD_MODE] Discovering active brands via API...")
-        active_brands = fetch_active_brands()
-        logger.info(f"🔍 Active brands: {active_brands}")
+        if target_brand_id and target_payload:
+            logger.info(f"📡 [PROD_MODE] Initializing single target brand from onboarding payload: brand_id={target_brand_id}")
+            try:
+                brand_idx = int(target_brand_id)
+                pipeline_payload = target_payload.get("pipelinecreds_payload") or {}
+                tenant_payload = target_payload.get("tenant_payload") or {}
+
+                brand_name = str(target_payload.get("brand_name") or pipeline_payload.get("brand_name") or target_brand_tag or brand_idx)
+                brand_tag = str(target_payload.get("brand_tag") or pipeline_payload.get("brand_tag") or target_brand_tag or brand_name).lower()
+                brand_tag_to_index_map[brand_tag] = brand_idx
+
+                db_host = pipeline_payload.get("db_host") or tenant_payload.get("db_host")
+                db_user = pipeline_payload.get("db_user") or tenant_payload.get("user") or "admin"
+                db_password = pipeline_payload.get("db_password") or tenant_payload.get("password")
+                db_port = int(pipeline_payload.get("port") or tenant_payload.get("port") or 3306)
+                db_name = pipeline_payload.get("db_database") or tenant_payload.get("database") or str(brand_name).upper()
+
+                shop_name = pipeline_payload.get("shop_name") or tenant_payload.get("shop_name") or target_payload.get("shop_name")
+                access_token = target_payload.get("access_token") or pipeline_payload.get("access_token") or tenant_payload.get("access_token")
+                api_version = pipeline_payload.get("api_version") or tenant_payload.get("api_version") or target_payload.get("api_version") or "2024-04"
+                speed_key = target_payload.get("speed_key") or pipeline_payload.get("speed_key") or tenant_payload.get("speed_key") or ""
+                app_map_val = target_payload.get("app_id_mapping") or pipeline_payload.get("app_id_mapping") or tenant_payload.get("app_id_mapping") or "{}"
+                app_map_str = app_map_val if isinstance(app_map_val, str) else json.dumps(app_map_val)
+                shop_currency = str(
+                    target_payload.get("shop_currency")
+                    or pipeline_payload.get("shop_currency")
+                    or tenant_payload.get("shop_currency")
+                    or ""
+                ).upper()
+
+                logger.info(
+                    f"🧾 Payload runtime values for brand_index={brand_idx}: "
+                    f"shop_name={shop_name}, db={db_name}, api_version={api_version}, "
+                    f"shop_currency={shop_currency or 'MISSING'}"
+                )
+
+                if not all([db_host, db_user, db_password, db_name, shop_name, access_token, shop_currency]):
+                    logger.error(
+                        f"❌ Incomplete onboarding payload runtime for brand_index={brand_idx}: "
+                        f"db_host={bool(db_host)}, db_user={bool(db_user)}, db_password={bool(db_password)}, "
+                        f"db_name={bool(db_name)}, shop_name={bool(shop_name)}, access_token={bool(access_token)}, "
+                        f"shop_currency={bool(shop_currency)}"
+                    )
+                    return
+
+                _setup_brand_infra(
+                    brand_idx, brand_name, brand_tag,
+                    db_host, db_user, db_password, db_port, db_name,
+                    shop_name, access_token, api_version, speed_key,
+                    app_map_str, shop_currency, ca_path, verify_cert, verify_identity
+                )
+            except Exception as e:
+                logger.error(f"❌ Payload-based runtime initialization failed for brand_id={target_brand_id}: {e}")
+                return
+        elif target_brand_id:
+            active_brands = {str(target_brand_id): target_brand_tag or str(target_brand_id)}
+            logger.info(f"📡 [PROD_MODE] Initializing single target brand only via API config: {active_brands}")
+        else:
+            logger.info("📡 [PROD_MODE] Discovering active brands via API...")
+            active_brands = fetch_active_brands()
+            logger.info(f"🔍 Active brands: {active_brands}")
 
         for brand_id_key, brand_tag_value in active_brands.items():
             logger.info(f"🔍 Fetching API config for brand: {brand_tag_value} (brand_id={brand_id_key})")
@@ -678,8 +832,9 @@ def initialize_brand_configs():
                 speed_key = decrypt_value(config.get("speed_key", ""))
                 app_map_val = config.get("app_id_mapping", "{}")
                 app_map_str = app_map_val if isinstance(app_map_val, str) else json.dumps(app_map_val)
+                shop_currency = str(config.get("shop_currency") or "").upper()
 
-                _setup_brand_infra(brand_idx, brand_name, brand_tag, db_host, db_user, db_password, db_port, db_name, shop_name, access_token, api_version, speed_key, app_map_str, ca_path, verify_cert, verify_identity)
+                _setup_brand_infra(brand_idx, brand_name, brand_tag, db_host, db_user, db_password, db_port, db_name, shop_name, access_token, api_version, speed_key, app_map_str, shop_currency, ca_path, verify_cert, verify_identity)
             except Exception as e:
                 logger.error(f"❌ API config error for {brand_tag_value}: {e}")
                 continue
@@ -759,11 +914,11 @@ async def fetch_orders_async(api_base_url: str, access_token: str, start_date: s
     # Ensure refunds/cancel snapshots are present
     fields = (
         "id,name,created_at,updated_at,cancelled_at,total_price,financial_status,"
-        "payment_gateway_names,app_id,currency,discount_codes,discount_applications,landing_site,"
+        "payment_gateway_names,app_id,currency,total_price_set,total_shipping_price_set,current_total_tax_set,current_total_discounts_set,current_total_duties_set,total_duties_set,discount_codes,discount_applications,landing_site,"
         "refunds,refunds/created_at,refunds/transactions,"
         "refunds/transactions/amount,refunds/transactions/kind,refunds/transactions/status,"
         "line_items,line_items/sku,line_items/title,line_items/variant_title,"
-        "line_items/price,line_items/quantity,line_items/total_discount,"
+        "line_items/price,line_items/price_set,line_items/quantity,line_items/total_discount,line_items/total_discount_set,line_items/discount_allocations,line_items/discount_allocations/amount,line_items/discount_allocations/amount_set,"
         "line_items/product_id,line_items/variant_id,line_items/properties,"
         "line_items/properties/name,line_items/properties/value,"
         "customer,customer/id,customer/email,customer/first_name,"
@@ -861,7 +1016,42 @@ def format_datetime(datetime_str: Optional[str]) -> Optional[str]:
 def cached_format_datetime(datetime_str):
     return format_datetime(datetime_str)
 
-def transform_orders_to_df_optimized(orders_list: List[Dict], app_mapping: Dict) -> pd.DataFrame:
+
+def _safe_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _shop_money_amount(node: Any) -> Optional[float]:
+    if not isinstance(node, dict):
+        return None
+    shop_money = node.get("shop_money") or {}
+    return _safe_float(shop_money.get("amount"))
+
+
+def _line_discount_amount(item: Dict[str, Any]) -> Optional[float]:
+    total_discount_set = _shop_money_amount(item.get("total_discount_set"))
+    if total_discount_set is not None:
+        return total_discount_set
+
+    total = 0.0
+    found = False
+    for allocation in item.get("discount_allocations") or []:
+        amount = _shop_money_amount(allocation.get("amount_set"))
+        if amount is None:
+            amount = _safe_float(allocation.get("amount"))
+        if amount is not None:
+            total += amount
+            found = True
+    if found:
+        return total
+    return _safe_float(item.get("total_discount"))
+
+def transform_orders_to_df_optimized(orders_list: List[Dict], app_mapping: Dict, shop_currency: str) -> pd.DataFrame:
     with timed("Transform orders → DataFrame (optimized)"):
         if not orders_list:
             return pd.DataFrame()
@@ -939,6 +1129,14 @@ def transform_orders_to_df_optimized(orders_list: List[Dict], app_mapping: Dict)
                     if name in utm_data and not utm_data[name]:
                          utm_data[name] = val
 
+            total_price_shop = _shop_money_amount(order.get("total_price_set"))
+            shipping_price_shop = _shop_money_amount(order.get("total_shipping_price_set"))
+            total_tax_shop = _shop_money_amount(order.get("current_total_tax_set"))
+            total_discounts_shop = _shop_money_amount(order.get("current_total_discounts_set"))
+            total_duties_shop = _shop_money_amount(order.get("current_total_duties_set"))
+            if total_duties_shop is None:
+                total_duties_shop = _shop_money_amount(order.get("total_duties_set"))
+
             base = {
                 "created_at": format_datetime(created_at_str),
                 "created_date": created_date,
@@ -952,21 +1150,21 @@ def transform_orders_to_df_optimized(orders_list: List[Dict], app_mapping: Dict)
                 "customer_phone": customer.get('phone'),
                 "financial_status": order.get('financial_status'),
                 "fulfillment_status": order.get('fulfillment_status') or 'Unfulfilled',
-                "currency": order.get('currency'),
+                "currency": shop_currency,
                 "discount_codes": discount_codes,
-                "discount_amount": total_discount_amount if total_discount_amount > 0 else None,
+                "discount_amount": total_discounts_shop if (total_discounts_shop or 0) > 0 else (total_discount_amount if total_discount_amount > 0 else None),
                 "discount_application_titles": discount_app_titles,
                 "discount_application_values": discount_app_values,
                 "discount_application_types": discount_app_types,
                 "discount_application_ids": discount_app_ids,
                 "order_app_id": str(order_app_id) if order_app_id else None,
                 "order_app_name": order_app_name,
-                "total_price": float(order.get('total_price', 0)) if order.get('total_price') else None,
-                "shipping_price": float(order.get('total_shipping_price_set', {}).get('shop_money', {}).get('amount', '0')) or None,
-                "total_tax": float(order.get('current_total_tax', 0)) if order.get('current_total_tax') else None,
+                "total_price": total_price_shop if total_price_shop is not None else _safe_float(order.get('total_price')),
+                "shipping_price": shipping_price_shop if shipping_price_shop is not None else _safe_float(order.get('total_shipping_price')),
+                "total_tax": total_tax_shop if total_tax_shop is not None else _safe_float(order.get('current_total_tax')),
                 "payment_gateway_names": payment_gateway_names,
-                "total_discounts": float(order.get('total_discounts', 0)) if order.get('total_discounts') else None,
-                "total_duties": float(order.get('total_duties', 0)) if order.get('total_duties') else None,
+                "total_discounts": total_discounts_shop if total_discounts_shop is not None else _safe_float(order.get('total_discounts')),
+                "total_duties": total_duties_shop if total_duties_shop is not None else _safe_float(order.get('total_duties')),
                 "sku": None, "variant_title": None, "line_item": None, "line_item_price": None,
                 "line_item_quantity": None, "line_item_total_discount": None, "product_id": None, "variant_id": None,
                 "tags": order.get('tags') or None,
@@ -1022,7 +1220,10 @@ def transform_orders_to_df_optimized(orders_list: List[Dict], app_mapping: Dict)
                 discount_amount_per_line_item = 0.0
                 for a in allocs:
                     try:
-                        discount_amount_per_line_item += float(a.get("amount") or 0.0)
+                        amount = _shop_money_amount(a.get("amount_set"))
+                        if amount is None:
+                            amount = float(a.get("amount") or 0.0)
+                        discount_amount_per_line_item += amount
                     except Exception:
                         pass
                 
@@ -1064,9 +1265,9 @@ def transform_orders_to_df_optimized(orders_list: List[Dict], app_mapping: Dict)
                     "utm_campaign": utm_data['utm_campaign'],
                     "utm_content": utm_data['utm_content'],
                     "utm_term": utm_data['utm_term'],
-                    "line_item_price": float(item.get('price', 0)) if item.get('price') else None,
+                    "line_item_price": _shop_money_amount(item.get("price_set")) if _shop_money_amount(item.get("price_set")) is not None else _safe_float(item.get('price')),
                     "line_item_quantity": int(item.get('quantity', 0)) if item.get('quantity') else None,
-                    "line_item_total_discount": float(item.get('total_discount', 0)) if item.get('total_discount') else None,
+                    "line_item_total_discount": _line_discount_amount(item),
                     "discount_amount_per_line_item": discount_amount_per_line_item,
                     "product_id": str(item.get('product_id')) if item.get('product_id') else None,
                     "variant_id": str(item.get('variant_id')) if item.get('variant_id') else None,
@@ -2574,6 +2775,7 @@ def fetch_shopify_sessions_via_shopifyql(
     shop_name: str,
     api_version: str,  # kept for signature compatibility
     access_token: str,
+    shop_currency: str,
     start_date: str = None,   # YYYY-MM-DD
     end_date: str = None,     # YYYY-MM-DD
 ) -> List[Dict[str, Any]]:
@@ -2584,7 +2786,7 @@ def fetch_shopify_sessions_via_shopifyql(
 
       FROM sessions
         SHOW sessions, sessions_with_cart_additions
-        WITH CURRENCY 'INR'
+        WITH CURRENCY '{shop_currency}'
         DURING today
         ORDER BY sessions DESC
         LIMIT 1000
@@ -2595,8 +2797,8 @@ def fetch_shopify_sessions_via_shopifyql(
       as integers. Falls back to (0, 0) on errors.
     """
 
-    if not shop_name or not api_version or not access_token:
-        logger.warning("ShopifyQL sessions fetch skipped: missing shop_name/api_version/access_token")
+    if not shop_name or not api_version or not access_token or not shop_currency:
+        logger.warning("ShopifyQL sessions fetch skipped: missing shop_name/api_version/access_token/shop_currency")
         return 0, 0
 
     # Construct Date Range
@@ -2611,7 +2813,7 @@ def fetch_shopify_sessions_via_shopifyql(
     FROM sessions
       SHOW sessions, sessions_with_cart_additions, day
       GROUP BY day
-      WITH CURRENCY 'INR'
+      WITH CURRENCY '{shop_currency}'
       {date_clause}
       ORDER BY day ASC
       LIMIT 10000
@@ -2737,13 +2939,14 @@ def fetch_shopify_hourly_sessions_via_shopifyql(
     shop_name: str,
     api_version: str,
     access_token: str,
+    shop_currency: str,
     start_date: str = None,   # YYYY-MM-DD
     end_date: str = None,     # YYYY-MM-DD
 ) -> List[Dict[str, Any]]:
     """
     Fetch hourly sessions from ShopifyQL.
     """
-    if not shop_name or not access_token:
+    if not shop_name or not access_token or not shop_currency:
         logger.warning("ShopifyQL hourly sessions fetch skipped: missing credentials")
         return []
 
@@ -2760,7 +2963,7 @@ def fetch_shopify_hourly_sessions_via_shopifyql(
       WHERE landing_page_path IS NOT NULL
         AND human_or_bot_session IN ('human', 'bot')
       GROUP BY day, hour, session_device_type
-      WITH CURRENCY 'INR'
+      WITH CURRENCY '{shop_currency}'
       {date_clause}
       ORDER BY day ASC, hour ASC
       LIMIT 10000
@@ -2897,6 +3100,7 @@ def update_hourly_sessions_summary_from_shopifyql(
     shop_name: str,
     api_version: str,
     access_token: str,
+    shop_currency: str,
     cursor=None,
     connection=None
 ):
@@ -2915,6 +3119,7 @@ def update_hourly_sessions_summary_from_shopifyql(
         shop_name=shop_name,
         api_version=api_version,
         access_token=access_token,
+        shop_currency=shop_currency,
         start_date=start_dt.isoformat(),
         end_date=end_dt.isoformat(),
     )
@@ -3002,6 +3207,7 @@ def update_sessions_summary_from_shopifyql(
     shop_name: str,
     api_version: str,
     access_token: str,
+    shop_currency: str,
     cursor=None,
     connection=None
 ):
@@ -3050,6 +3256,7 @@ def update_sessions_summary_from_shopifyql(
         shop_name=shop_name,
         api_version=api_version,
         access_token=access_token,
+        shop_currency=shop_currency,
         start_date=start_str,
         end_date=end_str,
     )
@@ -3400,7 +3607,7 @@ def process_and_upload_referrer_summary(
 # ---------------------------
 def update_sessions_summary(brand_index: int, brand_name: str, session_url: str,
                             x_brand_name: str, x_api_key: str,
-                            shop_name: str, api_version: str, access_token: str):
+                            shop_name: str, api_version: str, access_token: str, shop_currency: str):
     """
     Mixed mode:
       - NO LONGER calls in-house sessions API.
@@ -3440,6 +3647,7 @@ def update_sessions_summary(brand_index: int, brand_name: str, session_url: str,
                 shop_name=shop_name,
                 api_version=api_version,
                 access_token=access_token,
+                shop_currency=shop_currency,
                 cursor=cursor,
                 connection=connection
             )
@@ -3450,6 +3658,7 @@ def update_sessions_summary(brand_index: int, brand_name: str, session_url: str,
                 shop_name=shop_name,
                 api_version=api_version,
                 access_token=access_token,
+                shop_currency=shop_currency,
                 cursor=cursor,
                 connection=connection
             )
@@ -3482,10 +3691,14 @@ def process_single_brand(brand_index: int):
     shop_name = os.environ.get(f"SHOP_NAME_{brand_index}")
     api_version = os.environ.get(f"API_VERSION_{brand_index}")
     access_token = os.environ.get(f"ACCESS_TOKEN_{brand_index}")
+    shop_currency = os.environ.get(f"SHOP_CURRENCY_{brand_index}", "").upper()
     session_url = os.environ.get(f"SESSION_URL_{brand_index}", "")
     x_brand_name = ""
     x_api_key = ""
     api_base_url = f"https://{shop_name}.myshopify.com/admin/api/{api_version}"
+    if not shop_currency:
+        logger.error(f"❌ Missing shop currency for {brand_name}; store-currency onboarding cannot continue")
+        return
 
     # mapping
     app_id_mapping_str = os.environ.get(f"APP_ID_MAPPING_{brand_index}", "{}")
@@ -3510,7 +3723,7 @@ def process_single_brand(brand_index: int):
     ensure_utm_names_column(brand_index, 'overall_utm_summary')
 
     # Sessions
-    update_sessions_summary(brand_index, brand_name, session_url, x_brand_name, x_api_key, shop_name, api_version, access_token)
+    update_sessions_summary(brand_index, brand_name, session_url, x_brand_name, x_api_key, shop_name, api_version, access_token, shop_currency)
 
     # Track affected dates across all order processing
     affected_dates = {'min': None, 'max': None}
@@ -3578,7 +3791,7 @@ def process_single_brand(brand_index: int):
                         f"📅 Affected date range for {process['type']}: {min_d} to {max_d}"
                     )
             
-            df = transform_orders_to_df_optimized(filtered, app_id_mapping)
+            df = transform_orders_to_df_optimized(filtered, app_id_mapping, shop_currency)
 
             # Load immediately for this process type
             batch_size = int(os.environ.get('BATCH_SIZE', 1000))
@@ -3672,12 +3885,14 @@ def process_single_brand(brand_index: int):
 # ---------------------------
 _BACKFILL_INITIALIZED = False
 
-def _initialize_backfill_runtime() -> bool:
+def _initialize_backfill_runtime(target_brand_id: Optional[str] = None, target_brand_tag: Optional[str] = None, target_payload: Optional[Dict[str, Any]] = None) -> bool:
     global _BACKFILL_INITIALIZED, BACKFILL_MODE, BACKFILL_START_IST, BACKFILL_END_IST
     if _BACKFILL_INITIALIZED:
-        return True
+        logger.info("🧹 Existing backfill runtime detected; cleaning it up before reinitialization")
+        cleanup_brand_runtime()
+        _BACKFILL_INITIALIZED = False
 
-    initialize_brand_configs()
+    initialize_brand_configs(target_brand_id=target_brand_id, target_brand_tag=target_brand_tag, target_payload=target_payload)
     if not active_brand_indices:
         print("❌ No active brands initialized.")
         return False
@@ -3709,48 +3924,60 @@ def _run_main_backfill_for_brand(brand_tag: str) -> bool:
     return True
 
 def process_event(data: dict) -> bool:
+    global _BACKFILL_INITIALIZED
     brand_tag = data.get("brand_tag") or data.get("brand_name", "").lower()
+    brand_id = str(data.get("brand_id") or "").strip()
     if not brand_tag:
         print("⚠️ Missing brand_tag/brand_name in payload.")
         return False
+    if not brand_id:
+        print("⚠️ Missing brand_id in payload.")
+        return False
 
-    if not _initialize_backfill_runtime():
+    if not _initialize_backfill_runtime(target_brand_id=brand_id, target_brand_tag=brand_tag, target_payload=data):
         return False
 
     start_ymd, end_ymd = get_onboarding_backfill_window()
     print(f"📦 [BACKFILL] Coordinating onboarding backfill for {brand_tag} ({start_ymd} -> {end_ymd})")
 
     try:
-        print(f"📦 [BACKFILL] Substep 1/4: Main data backfill for {brand_tag}")
-        if not _run_main_backfill_for_brand(brand_tag):
-            print(f"❌ [BACKFILL] Main data backfill failed for {brand_tag}")
-            return False
-        print(f"✅ [BACKFILL] Substep 1/4 complete for {brand_tag}")
+        try:
+            print(f"📦 [BACKFILL] Substep 1/4: Main data backfill for {brand_tag}")
+            if not _run_main_backfill_for_brand(brand_tag):
+                print(f"❌ [BACKFILL] Main data backfill failed for {brand_tag}")
+                return False
+            print(f"✅ [BACKFILL] Substep 1/4 complete for {brand_tag}")
 
-        print(f"📦 [BACKFILL] Substep 2/4: Products pipeline backfill for {brand_tag}")
-        if not process_products_pipeline_backfill(data):
-            print(f"❌ [BACKFILL] Products pipeline backfill failed for {brand_tag}")
-            return False
-        print(f"✅ [BACKFILL] Substep 2/4 complete for {brand_tag}")
+            print(f"📦 [BACKFILL] Substep 2/4: Products pipeline backfill for {brand_tag}")
+            if not process_products_pipeline_backfill(data):
+                print(f"❌ [BACKFILL] Products pipeline backfill failed for {brand_tag}")
+                return False
+            print(f"✅ [BACKFILL] Substep 2/4 complete for {brand_tag}")
 
-        print(f"📦 [BACKFILL] Substep 3/4: Hourly product backfill for {brand_tag}")
-        if not process_hourly_products_backfill(data):
-            print(f"❌ [BACKFILL] Hourly product backfill failed for {brand_tag}")
-            return False
-        print(f"✅ [BACKFILL] Substep 3/4 complete for {brand_tag}")
+            print(f"📦 [BACKFILL] Substep 3/4: Hourly product backfill for {brand_tag}")
+            if not process_hourly_products_backfill(data):
+                print(f"❌ [BACKFILL] Hourly product backfill failed for {brand_tag}")
+                return False
+            print(f"✅ [BACKFILL] Substep 3/4 complete for {brand_tag}")
 
-        print(f"📦 [BACKFILL] Substep 4/4: UTM aggregation backfill for {brand_tag}")
-        if not process_utm_aggregation_backfill(data):
-            print(f"❌ [BACKFILL] UTM aggregation backfill failed for {brand_tag}")
+            print(f"📦 [BACKFILL] Substep 4/4: UTM aggregation backfill for {brand_tag}")
+            if not process_utm_aggregation_backfill(data):
+                print(f"❌ [BACKFILL] UTM aggregation backfill failed for {brand_tag}")
+                return False
+            print(f"✅ [BACKFILL] Substep 4/4 complete for {brand_tag}")
+        except Exception as err:
+            print(f"❌ [BACKFILL] Coordinated onboarding backfill failed for {brand_tag}: {err}")
+            logger.exception("Coordinated onboarding backfill failed")
             return False
-        print(f"✅ [BACKFILL] Substep 4/4 complete for {brand_tag}")
-    except Exception as err:
-        print(f"❌ [BACKFILL] Coordinated onboarding backfill failed for {brand_tag}: {err}")
-        logger.exception("Coordinated onboarding backfill failed")
-        return False
 
-    print(f"✅ Backfill completed for {brand_tag}")
-    return True
+        print(f"✅ Backfill completed for {brand_tag}")
+        return True
+    finally:
+        brand_idx = brand_tag_to_index_map.get(str(brand_tag).lower())
+        logger.info(f"🧹 Beginning post-backfill cleanup for brand_tag={brand_tag}, brand_idx={brand_idx}")
+        cleanup_brand_runtime(brand_idx)
+        _BACKFILL_INITIALIZED = False
+        logger.info(f"✅ Post-backfill cleanup finished for brand_tag={brand_tag}, brand_idx={brand_idx}")
 
 if __name__ == "__main__":
     # Integration only, standalone run() removed.

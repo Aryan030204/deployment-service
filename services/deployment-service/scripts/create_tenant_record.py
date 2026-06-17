@@ -47,6 +47,7 @@ def _build_payload(data: dict) -> dict:
     access_token = data.get("access_token", "")
     app_id_mapping = data.get("app_id_mapping", "")
     speed_key = data.get("speed_key", "")
+    shop_currency = data.get("shop_currency", "")
 
     return {
         "brand_id": brand_name.upper(),
@@ -64,6 +65,7 @@ def _build_payload(data: dict) -> dict:
         "port": 3306,
         "status": "active",
         "speed_key": speed_key,
+        "shop_currency": shop_currency,
         "session_url": "",
     }
 

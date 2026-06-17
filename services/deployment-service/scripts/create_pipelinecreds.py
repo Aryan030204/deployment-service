@@ -56,6 +56,7 @@ def _build_payload(data: dict) -> dict:
     db_port = int(DB_PORT)
     access_token = data.get("access_token", "")
     speed_key = data.get("speed_key", "")
+    shop_currency = data.get("shop_currency", "")
 
     DEFAULT_APP_ID_MAPPING = """{
     "238372913153": "GoKwik",
@@ -81,6 +82,7 @@ def _build_payload(data: dict) -> dict:
         "my_sql_url": f"mysql+pymysql://{db_user}:{DB_PASSWORD}@{DB_HOST}:{db_port}/{brand_name_upper}?charset=utf8mb4" + ("&ssl=true" if DB_HOST.lower() not in ["localhost", "127.0.0.1"] else ""),
         "app_id_mapping": app_id_mapping,
         "speed_key": speed_key,
+        "shop_currency": shop_currency,
         "created_at": now_iso,
         "updated_at": now_iso,
         "__v": 0,

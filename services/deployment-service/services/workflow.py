@@ -22,6 +22,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
     brand_id = data.get("brand_id")
     brand_name = data.get("brand_name")
     shop_name = data.get("shop_name")
+    shop_currency = data.get("shop_currency", "")
     brand_tag = str(brand_name).lower() if brand_name else ""
     brand_name_upper = str(brand_name).upper() if brand_name else ""
 
@@ -35,6 +36,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "shop_name": shop_name,
         "api_version": _env("API_VERSION"),
         "access_token": "",
+        "shop_currency": shop_currency,
         "session_url": "",
         "status": "active",
         "port": 3306,
@@ -62,6 +64,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "db_password": db_password,
         "db_user": db_user,
         "access_token": "",
+        "shop_currency": shop_currency,
         "api_version": _env("API_VERSION"),
         "app_id_mapping": app_id_mapping_val,
         "brand_tag": brand_tag,
@@ -79,6 +82,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
 
 def set_access_token(data: dict, access_token: str) -> dict:
     updated = ensure_workflow_payloads(data)
+    updated["access_token"] = access_token
     updated["tenant_payload"]["access_token"] = access_token
     updated["pipelinecreds_payload"]["access_token"] = access_token
     return updated
@@ -86,8 +90,17 @@ def set_access_token(data: dict, access_token: str) -> dict:
 
 def set_speed_key(data: dict, speed_key: str) -> dict:
     updated = ensure_workflow_payloads(data)
+    updated["speed_key"] = speed_key
     updated["pipelinecreds_payload"]["speed_key"] = speed_key
     if "speed_key" in updated["tenant_payload"]:
         updated["tenant_payload"]["speed_key"] = speed_key
+    return updated
+
+
+def set_shop_currency(data: dict, shop_currency: str) -> dict:
+    updated = ensure_workflow_payloads(data)
+    updated["shop_currency"] = shop_currency
+    updated["tenant_payload"]["shop_currency"] = shop_currency
+    updated["pipelinecreds_payload"]["shop_currency"] = shop_currency
     return updated
 

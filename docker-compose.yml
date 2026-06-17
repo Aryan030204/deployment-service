@@ -12,6 +12,16 @@ services:
       - .env
     networks:
       - shared-net
+  deployment-worker:
+    build:
+      context: .
+      dockerfile: services/deployment-service/Dockerfile
+    restart: unless-stopped
+    command: ["python", "main_worker.py"]
+    env_file:
+      - .env
+    networks:
+      - shared-net
 
 networks:
   shared-net:

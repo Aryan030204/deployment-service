@@ -11,3 +11,4 @@ pymysql
 fastapi
 uvicorn
 pymongo
+redis
