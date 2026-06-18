@@ -13,6 +13,10 @@ from services.workflow import (
     STATE_SPEED_KEY_GENERATED,
     STATE_TENANT_RECORD_CREATED,
     STATE_PIPELINE_CREDENTIALS_CREATED,
+    STATE_MAIN_BACKFILL_COMPLETED,
+    STATE_PRODUCTS_PIPELINE_BACKFILL_COMPLETED,
+    STATE_HOURLY_PRODUCTS_BACKFILL_COMPLETED,
+    STATE_UTM_AGGREGATION_BACKFILL_COMPLETED,
     STATE_DATA_BACKFILL_COMPLETED,
     STATE_TENANT_ADDED,
     ensure_workflow_payloads,
@@ -27,7 +31,10 @@ from scripts.clone_database import process_event as process_clone_db
 from scripts.generate_speed_token import process_event as process_speed_token
 from scripts.create_tenant_record import process_event as process_tenant_record
 from scripts.create_pipelinecreds import process_event as process_pipelinecreds
-from scripts.backfill_data import process_event as process_backfill
+from scripts.backfill_data import process_main_backfill_event
+from scripts.backfill_products_pipeline_data import process_event as process_products_pipeline_backfill
+from scripts.backfill_hourly_products_data import process_event as process_hourly_products_backfill
+from scripts.backfill_utm_aggregation import process_event as process_utm_aggregation_backfill
 
 logger = get_logger("deployment-service.orchestrator")
 T = TypeVar("T")
@@ -134,7 +141,7 @@ def run_pipeline(initial_data: Dict[str, Any]) -> bool:
     _send_external_log(brand_id, brand_name, start_msg)
 
     try:
-        step1_msg = f"{log_prefix}Step 1/6: Generating Shopify access token"
+        step1_msg = f"{log_prefix}Step 1/9: Generating Shopify access token"
         print(step1_msg)
         _send_external_log(brand_id, brand_name, step1_msg)
 
@@ -177,7 +184,7 @@ def run_pipeline(initial_data: Dict[str, Any]) -> bool:
         print(ok_msg)
         _send_external_log(brand_id, brand_name, ok_msg)
 
-        step2_msg = f"{log_prefix}Step 2/6: Cloning database"
+        step2_msg = f"{log_prefix}Step 2/9: Cloning database"
         print(step2_msg)
         _send_external_log(brand_id, brand_name, step2_msg)
 
@@ -198,7 +205,7 @@ def run_pipeline(initial_data: Dict[str, Any]) -> bool:
         print(ok_msg)
         _send_external_log(brand_id, brand_name, ok_msg)
 
-        step3_msg = f"{log_prefix}Step 3/6: Generating speed token"
+        step3_msg = f"{log_prefix}Step 3/9: Generating speed token"
         print(step3_msg)
         _send_external_log(brand_id, brand_name, step3_msg)
 
@@ -221,7 +228,7 @@ def run_pipeline(initial_data: Dict[str, Any]) -> bool:
         print(ok_msg)
         _send_external_log(brand_id, brand_name, ok_msg)
 
-        step4_msg = f"{log_prefix}Step 4/6: Creating tenant record"
+        step4_msg = f"{log_prefix}Step 4/9: Creating tenant record"
         print(step4_msg)
         _send_external_log(brand_id, brand_name, step4_msg)
 
@@ -242,7 +249,7 @@ def run_pipeline(initial_data: Dict[str, Any]) -> bool:
         print(ok_msg)
         _send_external_log(brand_id, brand_name, ok_msg)
 
-        step5_msg = f"{log_prefix}Step 5/6: Creating pipeline credentials"
+        step5_msg = f"{log_prefix}Step 5/9: Creating pipeline credentials"
         print(step5_msg)
         _send_external_log(brand_id, brand_name, step5_msg)
 
@@ -263,26 +270,91 @@ def run_pipeline(initial_data: Dict[str, Any]) -> bool:
         print(ok_msg)
         _send_external_log(brand_id, brand_name, ok_msg)
 
-        step6_msg = f"{log_prefix}Step 6/6: Starting data backfill"
+        step6_msg = f"{log_prefix}Step 6/9: Starting main data backfill"
         print(step6_msg)
         _send_external_log(brand_id, brand_name, step6_msg)
 
         if not _run_with_retries(
-            lambda: process_backfill(data),
-            step_label="Step 6 data backfill",
+            lambda: process_main_backfill_event(data),
+            step_label="Step 6 main data backfill",
             brand_id=brand_id,
             brand_name=brand_name,
             log_prefix=log_prefix,
         ):
-            err_msg = f"{log_prefix}Failed at Step 6: Data backfill failed"
+            err_msg = f"{log_prefix}Failed at Step 6: Main data backfill failed"
             print(err_msg)
             _send_external_log(brand_id, brand_name, err_msg)
             return False
 
-        data["state"] = STATE_DATA_BACKFILL_COMPLETED
-        ok_msg = f"{log_prefix}Step 6 Complete: Data backfill finished"
+        data["state"] = STATE_MAIN_BACKFILL_COMPLETED
+        ok_msg = f"{log_prefix}Step 6 Complete: Main data backfill finished"
         print(ok_msg)
         _send_external_log(brand_id, brand_name, ok_msg)
+
+        step7_msg = f"{log_prefix}Step 7/9: Starting products pipeline backfill"
+        print(step7_msg)
+        _send_external_log(brand_id, brand_name, step7_msg)
+
+        if not _run_with_retries(
+            lambda: process_products_pipeline_backfill(data),
+            step_label="Step 7 products pipeline backfill",
+            brand_id=brand_id,
+            brand_name=brand_name,
+            log_prefix=log_prefix,
+        ):
+            err_msg = f"{log_prefix}Failed at Step 7: Products pipeline backfill failed"
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
+            return False
+
+        data["state"] = STATE_PRODUCTS_PIPELINE_BACKFILL_COMPLETED
+        ok_msg = f"{log_prefix}Step 7 Complete: Products pipeline backfill finished"
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
+
+        step8_msg = f"{log_prefix}Step 8/9: Starting hourly product backfill"
+        print(step8_msg)
+        _send_external_log(brand_id, brand_name, step8_msg)
+
+        if not _run_with_retries(
+            lambda: process_hourly_products_backfill(data),
+            step_label="Step 8 hourly product backfill",
+            brand_id=brand_id,
+            brand_name=brand_name,
+            log_prefix=log_prefix,
+        ):
+            err_msg = f"{log_prefix}Failed at Step 8: Hourly product backfill failed"
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
+            return False
+
+        data["state"] = STATE_HOURLY_PRODUCTS_BACKFILL_COMPLETED
+        ok_msg = f"{log_prefix}Step 8 Complete: Hourly product backfill finished"
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
+
+        step9_msg = f"{log_prefix}Step 9/9: Starting UTM aggregation backfill"
+        print(step9_msg)
+        _send_external_log(brand_id, brand_name, step9_msg)
+
+        if not _run_with_retries(
+            lambda: process_utm_aggregation_backfill(data),
+            step_label="Step 9 UTM aggregation backfill",
+            brand_id=brand_id,
+            brand_name=brand_name,
+            log_prefix=log_prefix,
+        ):
+            err_msg = f"{log_prefix}Failed at Step 9: UTM aggregation backfill failed"
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
+            return False
+
+        data["state"] = STATE_UTM_AGGREGATION_BACKFILL_COMPLETED
+        ok_msg = f"{log_prefix}Step 9 Complete: UTM aggregation backfill finished"
+        print(ok_msg)
+        _send_external_log(brand_id, brand_name, ok_msg)
+
+        data["state"] = STATE_DATA_BACKFILL_COMPLETED
 
         time.sleep(2)
         data["state"] = STATE_TENANT_ADDED

@@ -3926,6 +3926,41 @@ def _run_main_backfill_for_brand(brand_tag: str) -> bool:
     process_single_brand(brand_idx)
     return True
 
+
+def process_main_backfill_event(data: dict) -> bool:
+    global _BACKFILL_INITIALIZED
+    brand_tag = data.get("brand_tag") or data.get("brand_name", "").lower()
+    brand_id = str(data.get("brand_id") or "").strip()
+    if not brand_tag:
+        print("⚠️ Missing brand_tag/brand_name in payload.")
+        return False
+    if not brand_id:
+        print("⚠️ Missing brand_id in payload.")
+        return False
+
+    if not _initialize_backfill_runtime(target_brand_id=brand_id, target_brand_tag=brand_tag, target_payload=data):
+        return False
+
+    start_ymd, end_ymd = get_onboarding_backfill_window()
+    print(f"📦 [BACKFILL] Starting main onboarding backfill for {brand_tag} ({start_ymd} -> {end_ymd})")
+
+    try:
+        if not _run_main_backfill_for_brand(brand_tag):
+            print(f"❌ [BACKFILL] Main data backfill failed for {brand_tag}")
+            return False
+        print(f"✅ [BACKFILL] Main data backfill completed for {brand_tag}")
+        return True
+    except Exception as err:
+        print(f"❌ [BACKFILL] Main onboarding backfill failed for {brand_tag}: {err}")
+        logger.exception("Main onboarding backfill failed")
+        return False
+    finally:
+        brand_idx = brand_tag_to_index_map.get(str(brand_tag).lower())
+        logger.info(f"🧹 Beginning post-backfill cleanup for brand_tag={brand_tag}, brand_idx={brand_idx}")
+        cleanup_brand_runtime(brand_idx)
+        _BACKFILL_INITIALIZED = False
+        logger.info(f"✅ Post-backfill cleanup finished for brand_tag={brand_tag}, brand_idx={brand_idx}")
+
 def process_event(data: dict) -> bool:
     global _BACKFILL_INITIALIZED
     brand_tag = data.get("brand_tag") or data.get("brand_name", "").lower()
