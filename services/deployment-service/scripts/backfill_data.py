@@ -746,6 +746,7 @@ def initialize_brand_configs(target_brand_id: Optional[str] = None, target_brand
                 logger.error(f"❌ Local config error for {idx_str}: {e}")
                 continue
     else:
+        active_brands: Dict[str, str] = {}
         if target_brand_id and target_payload:
             logger.info(f"📡 [PROD_MODE] Initializing single target brand from onboarding payload: brand_id={target_brand_id}")
             try:
@@ -808,36 +809,38 @@ def initialize_brand_configs(target_brand_id: Optional[str] = None, target_brand
             active_brands = fetch_active_brands()
             logger.info(f"🔍 Active brands: {active_brands}")
 
-        for brand_id_key, brand_tag_value in active_brands.items():
-            logger.info(f"🔍 Fetching API config for brand: {brand_tag_value} (brand_id={brand_id_key})")
-            config = fetch_brand_config(brand_id_key)
-            if not config: continue
+        if active_brands:
+            for brand_id_key, brand_tag_value in active_brands.items():
+                logger.info(f"🔍 Fetching API config for brand: {brand_tag_value} (brand_id={brand_id_key})")
+                config = fetch_brand_config(brand_id_key)
+                if not config:
+                    continue
 
-            try:
-                # Use brand_id from the API response key (authoritative source)
-                brand_idx = int(brand_id_key)
-                brand_name = config.get("brand_name", brand_tag_value)
-                brand_tag = config.get("brand_tag", brand_tag_value.lower())
-                brand_tag_to_index_map[brand_tag] = brand_idx
+                try:
+                    # Use brand_id from the API response key (authoritative source)
+                    brand_idx = int(brand_id_key)
+                    brand_name = config.get("brand_name", brand_tag_value)
+                    brand_tag = config.get("brand_tag", brand_tag_value.lower())
+                    brand_tag_to_index_map[brand_tag] = brand_idx
 
-                db_host = config["db_host"]
-                db_user = config["db_user"]
-                db_password = decrypt_value(config["db_password"])
-                db_port = int(config.get("port", 3306))
-                db_name = config.get("db_database", brand_tag_value)
-                
-                shop_name = config["shop_name"]
-                access_token = decrypt_value(config["access_token"])
-                api_version = config.get("api_version", "2024-04")
-                speed_key = decrypt_value(config.get("speed_key", ""))
-                app_map_val = config.get("app_id_mapping", "{}")
-                app_map_str = app_map_val if isinstance(app_map_val, str) else json.dumps(app_map_val)
-                shop_currency = str(config.get("shop_currency") or "").upper()
+                    db_host = config["db_host"]
+                    db_user = config["db_user"]
+                    db_password = decrypt_value(config["db_password"])
+                    db_port = int(config.get("port", 3306))
+                    db_name = config.get("db_database", brand_tag_value)
+                    
+                    shop_name = config["shop_name"]
+                    access_token = decrypt_value(config["access_token"])
+                    api_version = config.get("api_version", "2024-04")
+                    speed_key = decrypt_value(config.get("speed_key", ""))
+                    app_map_val = config.get("app_id_mapping", "{}")
+                    app_map_str = app_map_val if isinstance(app_map_val, str) else json.dumps(app_map_val)
+                    shop_currency = str(config.get("shop_currency") or "").upper()
 
-                _setup_brand_infra(brand_idx, brand_name, brand_tag, db_host, db_user, db_password, db_port, db_name, shop_name, access_token, api_version, speed_key, app_map_str, shop_currency, ca_path, verify_cert, verify_identity)
-            except Exception as e:
-                logger.error(f"❌ API config error for {brand_tag_value}: {e}")
-                continue
+                    _setup_brand_infra(brand_idx, brand_name, brand_tag, db_host, db_user, db_password, db_port, db_name, shop_name, access_token, api_version, speed_key, app_map_str, shop_currency, ca_path, verify_cert, verify_identity)
+                except Exception as e:
+                    logger.error(f"❌ API config error for {brand_tag_value}: {e}")
+                    continue
 
     logger.info(f"✅ Active brands initialized: {active_brand_indices}")
 
