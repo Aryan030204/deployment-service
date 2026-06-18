@@ -301,6 +301,51 @@ def fetch_hourly_sessions(brand_info, date_str):
         offset += PAGE_SIZE
     return out
 
+
+def _normalize_dim_value(value: Any, default: Optional[str] = None) -> Optional[str]:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip() or default
+    return str(value)
+
+
+def _aggregate_hourly_session_rows(raw_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    aggregated: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for row in raw_rows:
+        hour = int(row.get("hour_of_day") or 0)
+        key = (
+            hour,
+            _normalize_dim_value(row.get("landing_page_type"), "Unknown"),
+            _normalize_dim_value(row.get("landing_page_path")),
+            _normalize_dim_value(row.get("utm_source")),
+            _normalize_dim_value(row.get("utm_medium")),
+            _normalize_dim_value(row.get("utm_campaign")),
+            _normalize_dim_value(row.get("utm_content")),
+            _normalize_dim_value(row.get("utm_term")),
+            _normalize_dim_value(row.get("referrer_name")),
+        )
+
+        if key not in aggregated:
+            aggregated[key] = {
+                "hour_of_day": hour,
+                "landing_page_type": key[1],
+                "landing_page_path": key[2],
+                "utm_source": key[3],
+                "utm_medium": key[4],
+                "utm_campaign": key[5],
+                "utm_content": key[6],
+                "utm_term": key[7],
+                "referrer_name": key[8],
+                "sessions": 0,
+                "sessions_with_cart_additions": 0,
+            }
+
+        aggregated[key]["sessions"] += int(row.get("sessions", 0) or 0)
+        aggregated[key]["sessions_with_cart_additions"] += int(row.get("sessions_with_cart_additions", 0) or 0)
+
+    return list(aggregated.values())
+
 # --------------------------
 # Orchestration
 # --------------------------
@@ -339,14 +384,18 @@ def process_brand(brand_id: str, brand_tag: str, start_ymd: str, end_ymd: str) -
             if not raw_rows:
                 logger.info(f"[{brand_tag}] No session data for {date_str}")
                 continue
+            aggregated_rows = _aggregate_hourly_session_rows(raw_rows)
+            logger.info(
+                f"[{brand_tag}] Hourly session rows for {date_str}: raw={len(raw_rows)} aggregated={len(aggregated_rows)}"
+            )
                 
             # 2. Upsert into hourly_product_sessions
             cursor = conn.cursor()
             cursor.execute("DELETE FROM hourly_product_sessions WHERE date = %s", (date_str,))
             
             chunk_size = 500
-            for i in range(0, len(raw_rows), chunk_size):
-                chunk = raw_rows[i:i+chunk_size]
+            for i in range(0, len(aggregated_rows), chunk_size):
+                chunk = aggregated_rows[i:i+chunk_size]
                 values = []
                 for r in chunk:
                     values.append((
@@ -361,6 +410,17 @@ def process_brand(brand_id: str, brand_tag: str, start_ymd: str, end_ymd: str) -
                     utm_source, utm_medium, utm_campaign, utm_content, utm_term, referrer_name, 
                     sessions, sessions_with_cart_additions)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        sessions = VALUES(sessions),
+                        sessions_with_cart_additions = VALUES(sessions_with_cart_additions),
+                        landing_page_type = VALUES(landing_page_type),
+                        landing_page_path = VALUES(landing_page_path),
+                        utm_source = VALUES(utm_source),
+                        utm_medium = VALUES(utm_medium),
+                        utm_campaign = VALUES(utm_campaign),
+                        utm_content = VALUES(utm_content),
+                        utm_term = VALUES(utm_term),
+                        referrer_name = VALUES(referrer_name)
                 """, values)
             conn.commit()
             
