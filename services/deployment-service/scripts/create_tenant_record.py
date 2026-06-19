@@ -47,6 +47,7 @@ def _build_payload(data: dict) -> dict:
     access_token = data.get("access_token", "")
     app_id_mapping = data.get("app_id_mapping", "")
     speed_key = data.get("speed_key", "")
+    store_timezone = data.get("timezone", "")
     shop_currency = data.get("shop_currency", "")
 
     return {
@@ -60,6 +61,7 @@ def _build_payload(data: dict) -> dict:
         "app_id_mapping": app_id_mapping,
         "password": DB_PASSWORD,
         "shop_name": shop_name,
+        "store_timezone": store_timezone,
         "api_version": API_VERSION,
         "access_token": access_token,
         "port": 3306,

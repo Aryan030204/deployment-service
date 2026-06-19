@@ -26,6 +26,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
     brand_id = data.get("brand_id")
     brand_name = data.get("brand_name")
     shop_name = data.get("shop_name")
+    store_timezone = data.get("timezone", "")
     shop_currency = data.get("shop_currency", "")
     brand_tag = str(brand_name).lower() if brand_name else ""
     brand_name_upper = str(brand_name).upper() if brand_name else ""
@@ -38,6 +39,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "db_host": _env("DB_HOST"),
         "brand_num": brand_id,
         "shop_name": shop_name,
+        "store_timezone": store_timezone,
         "api_version": _env("API_VERSION"),
         "access_token": "",
         "shop_currency": shop_currency,

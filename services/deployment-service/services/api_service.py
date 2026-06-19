@@ -20,6 +20,7 @@ class OnboardRequest(BaseModel):
     client_id: str
     client_secret: str
     shop_name: str
+    timezone: Optional[str] = None
     code: Optional[str] = None
     brand_url: Optional[str] = None
     website_url: Optional[str] = None
@@ -59,6 +60,8 @@ async def onboard_tenant(
             "client_secret": encrypted_client_secret,
             "shop_name": request.shop_name
         }
+        if request.timezone:
+            payload["timezone"] = request.timezone
         if request.code:
             payload["code"] = request.code
         if request.brand_url:
