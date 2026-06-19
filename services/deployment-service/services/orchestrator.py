@@ -22,11 +22,12 @@ from services.workflow import (
     ensure_workflow_payloads,
     set_access_token,
     set_shop_currency,
+    set_store_timezone,
     set_speed_key,
 )
 
 from scripts.generate_access_token import process_event as process_access_token
-from scripts.fetch_shop_currency import process_event as process_shop_currency
+from scripts.fetch_shop_currency import process_event as process_shop_metadata
 from scripts.clone_database import process_event as process_clone_db
 from scripts.generate_speed_token import process_event as process_speed_token
 from scripts.create_tenant_record import process_event as process_tenant_record
@@ -162,15 +163,23 @@ def run_pipeline(initial_data: Dict[str, Any]) -> bool:
             return False
 
         data = set_access_token(data, access_token)
-        shop_currency = _run_with_retries(
-            lambda: process_shop_currency(data),
-            step_label="Step 1 shop currency fetch",
+        shop_metadata = _run_with_retries(
+            lambda: process_shop_metadata(data),
+            step_label="Step 1 shop metadata fetch",
             brand_id=brand_id,
             brand_name=brand_name,
             log_prefix=log_prefix,
         )
-        if not shop_currency:
-            err_msg = f"{log_prefix}Failed at Step 1: Shop currency fetch failed"
+        if not shop_metadata:
+            err_msg = f"{log_prefix}Failed at Step 1: Shop metadata fetch failed"
+            print(err_msg)
+            _send_external_log(brand_id, brand_name, err_msg)
+            return False
+
+        shop_currency = str(shop_metadata.get("shop_currency") or "").strip().upper()
+        store_timezone = str(shop_metadata.get("store_timezone") or "").strip()
+        if not shop_currency or not store_timezone:
+            err_msg = f"{log_prefix}Failed at Step 1: Shop metadata incomplete"
             print(err_msg)
             _send_external_log(brand_id, brand_name, err_msg)
             return False
@@ -178,9 +187,13 @@ def run_pipeline(initial_data: Dict[str, Any]) -> bool:
         currency_msg = f"{log_prefix}Shop currency fetched: {shop_currency}"
         print(currency_msg)
         _send_external_log(brand_id, brand_name, currency_msg)
+        timezone_msg = f"{log_prefix}Shop timezone fetched: {store_timezone}"
+        print(timezone_msg)
+        _send_external_log(brand_id, brand_name, timezone_msg)
         data = set_shop_currency(data, shop_currency)
+        data = set_store_timezone(data, store_timezone)
         data["state"] = STATE_ACCESS_TOKEN_GENERATED
-        ok_msg = f"{log_prefix}Step 1 Complete: Access token generated and shop currency resolved to {shop_currency}"
+        ok_msg = f"{log_prefix}Step 1 Complete: Access token generated and shop metadata resolved"
         print(ok_msg)
         _send_external_log(brand_id, brand_name, ok_msg)
 

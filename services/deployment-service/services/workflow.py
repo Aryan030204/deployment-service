@@ -26,7 +26,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
     brand_id = data.get("brand_id")
     brand_name = data.get("brand_name")
     shop_name = data.get("shop_name")
-    store_timezone = data.get("timezone", "")
+    store_timezone = data.get("store_timezone", "")
     shop_currency = data.get("shop_currency", "")
     brand_tag = str(brand_name).lower() if brand_name else ""
     brand_name_upper = str(brand_name).upper() if brand_name else ""
@@ -108,5 +108,12 @@ def set_shop_currency(data: dict, shop_currency: str) -> dict:
     updated["shop_currency"] = shop_currency
     updated["tenant_payload"]["shop_currency"] = shop_currency
     updated["pipelinecreds_payload"]["shop_currency"] = shop_currency
+    return updated
+
+
+def set_store_timezone(data: dict, store_timezone: str) -> dict:
+    updated = ensure_workflow_payloads(data)
+    updated["store_timezone"] = store_timezone
+    updated["tenant_payload"]["store_timezone"] = store_timezone
     return updated
 
