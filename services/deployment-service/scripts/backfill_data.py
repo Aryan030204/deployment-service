@@ -1493,6 +1493,17 @@ def get_affected_date_range_new_orders(orders_list: List[Dict]) -> Tuple[Optiona
     return min(dates), max(dates)
 
 
+def get_affected_dates_new_orders(orders_list: List[Dict]) -> Set[str]:
+    """Return the exact IST created_date values affected by NEW orders."""
+    dates: Set[str] = set()
+    for order in orders_list or []:
+        if order.get("created_at"):
+            created_date = _parse_iso_to_ist_date(order["created_at"])
+            if created_date:
+                dates.add(created_date)
+    return dates
+
+
 
 def get_affected_date_range_updates(
     orders_list: List[Dict],
@@ -1547,6 +1558,33 @@ def get_affected_date_range_updates(
         return None, None
 
     return min(dates), max(dates)
+
+
+def get_affected_dates_updates(
+    orders_list: List[Dict],
+    extra_event_dates: Optional[Set[str]] = None,
+) -> Set[str]:
+    """Return the exact IST dates affected by UPDATED orders."""
+    dates: Set[str] = set(extra_event_dates or set())
+    for order in orders_list or []:
+        financial_status = (order.get("financial_status") or "").lower()
+        refunds = order.get("refunds") or []
+        cancelled_at = order.get("cancelled_at")
+
+        affects_summaries = (
+            financial_status not in ("paid", "pending")
+            or cancelled_at is not None
+            or len(refunds) > 0
+        )
+        if not affects_summaries:
+            continue
+
+        if order.get("updated_at"):
+            updated_date = _parse_iso_to_ist_date(order["updated_at"])
+            if updated_date:
+                dates.add(updated_date)
+
+    return dates
 
 
 # ---------------------------
@@ -1615,6 +1653,52 @@ def ensure_user_agent_column(brand_index: int, table_name: str):
                     logger.warning(f"⚠️ Could not add 'user_agent' column to {table_name}: {e}")
     except Exception as e:
         logger.error(f"❌ Error in ensure_user_agent_column for {table_name}: {e}")
+
+
+def ensure_customer_tag_column(brand_index: int, table_name: str):
+    """
+    Ensure customer_tag exists in the specific table.
+    """
+    engine = sqlalchemy_engines.get(brand_index)
+    if not engine:
+        return
+
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN customer_tag TEXT"))
+                conn.commit()
+            except Exception as e:
+                if "Duplicate column name" in str(e):
+                    pass
+    except Exception:
+        pass
+
+
+def ensure_discount_amount_per_line_item_column(brand_index: int, table_name: str):
+    """
+    Ensure discount_amount_per_line_item exists in the specific table.
+    """
+    engine = sqlalchemy_engines.get(brand_index)
+    if not engine:
+        return
+
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {table_name} "
+                        "ADD COLUMN discount_amount_per_line_item FLOAT NULL "
+                        "AFTER line_item_total_discount"
+                    )
+                )
+                conn.commit()
+            except Exception as e:
+                if "Duplicate column name" in str(e):
+                    pass
+    except Exception:
+        pass
 
 
 def ensure_device_summary_columns(brand_index: int, table_name: str):
@@ -1696,7 +1780,7 @@ def load_data_to_sql_optimized(df: pd.DataFrame, brand_index: int, brand_name: s
         Column('total_tax', Float), Column('payment_gateway_names', Text), Column('total_discounts', Float),
         Column('total_duties', Float), Column('sku', String(100)), Column('variant_title', String(100)),
         Column('line_item', String(255)), Column('line_item_price', Float), Column('line_item_quantity', Integer),
-        Column('line_item_total_discount', Float), Column('product_id', String(50)),
+        Column('line_item_total_discount', Float), Column('discount_amount_per_line_item', Float), Column('product_id', String(50)),
         Column('variant_id', String(50)), Column('tags', Text), Column('updated_at', DateTime),
         Column('updated_date', String(10)), Column('updated_time', String(8)), Column('orig_referrer', Text),
         Column('full_url', Text), Column('customer_ip', String(50)), Column('pg_order_id', String(50)),
@@ -3721,6 +3805,10 @@ def process_single_brand(brand_index: int):
     # --- Pre-flight Schema Migration (Avoid Locks) ---
     ensure_user_agent_column(brand_index, 'shopify_orders')
     ensure_user_agent_column(brand_index, 'shopify_orders_update')
+    ensure_customer_tag_column(brand_index, 'shopify_orders')
+    ensure_customer_tag_column(brand_index, 'shopify_orders_update')
+    ensure_discount_amount_per_line_item_column(brand_index, 'shopify_orders')
+    ensure_discount_amount_per_line_item_column(brand_index, 'shopify_orders_update')
     ensure_device_summary_columns(brand_index, 'hourly_sessions_summary')
     ensure_device_summary_columns(brand_index, 'hourly_sessions_summary_shopify')
     ensure_utm_names_column(brand_index, 'overall_utm_summary')
@@ -3729,7 +3817,7 @@ def process_single_brand(brand_index: int):
     update_sessions_summary(brand_index, brand_name, session_url, x_brand_name, x_api_key, shop_name, api_version, access_token, shop_currency)
 
     # Track affected dates across all order processing
-    affected_dates = {'min': None, 'max': None}
+    affected_dates: Set[str] = set()
     
     # Orders (NEW + UPDATED) with single connection/cursor reused
     process_types = [
@@ -3786,10 +3874,11 @@ def process_single_brand(brand_index: int):
 
             # Track affected date range for NEW orders before load
             if process['type'] == 'NEW':
-                min_d, max_d = get_affected_date_range_new_orders(filtered)
-                if min_d:
-                    affected_dates['min'] = min(affected_dates['min'] or min_d, min_d)
-                    affected_dates['max'] = max(affected_dates['max'] or max_d, max_d)
+                new_dates = get_affected_dates_new_orders(filtered)
+                if new_dates:
+                    min_d = min(new_dates)
+                    max_d = max(new_dates)
+                    affected_dates.update(new_dates)
                     logger.info(
                         f"📅 Affected date range for {process['type']}: {min_d} to {max_d}"
                     )
@@ -3807,13 +3896,14 @@ def process_single_brand(brand_index: int):
 
             # UPDATED orders: build affected range from updated_at + returns_fact deltas.
             if process['type'] == 'UPDATED':
-                min_d, max_d = get_affected_date_range_updates(
+                updated_dates = get_affected_dates_updates(
                     filtered,
                     extra_event_dates=changed_return_dates,
                 )
-                if min_d:
-                    affected_dates['min'] = min(affected_dates['min'] or min_d, min_d)
-                    affected_dates['max'] = max(affected_dates['max'] or max_d, max_d)
+                if updated_dates:
+                    min_d = min(updated_dates)
+                    max_d = max(updated_dates)
+                    affected_dates.update(updated_dates)
                     logger.info(
                         f"📅 Affected date range for {process['type']}: {min_d} to {max_d}"
                     )
@@ -3831,23 +3921,26 @@ def process_single_brand(brand_index: int):
             connection.commit()
             logger.info(f"✅ Recorded pipeline completion for {brand_name}")
 
-    # Summaries (INCREMENTAL - only affected dates)
-    if affected_dates['min'] and affected_dates['max']:
-        logger.info(f"\n--- Updating summaries for {brand_name} (INCREMENTAL: {affected_dates['min']} to {affected_dates['max']}) ---")
+    # Summaries still rebuild via min/max in this onboarding fork, but the
+    # affected-date tracking now matches the asset pipeline changes.
+    if affected_dates:
+        min_date = min(affected_dates)
+        max_date = max(affected_dates)
+        logger.info(f"\n--- Updating summaries for {brand_name} (INCREMENTAL: {len(affected_dates)} date(s), {min_date} to {max_date}) ---")
         execute_summary_queries_incremental(
             brand_index,
             brand_name,
             brand_key,
-            affected_dates['min'],
-            affected_dates['max'],
+            min_date,
+            max_date,
         )
     else:
         logger.info(f"✔️ No order-based summary updates needed for {brand_name} (no affected dates)")
 
     # --- ShopifyQL Summaries (Always updated for 'today' or affected range) ---
     try:
-        u_min = affected_dates['min'] or now_ist().date().isoformat()
-        u_max = affected_dates['max'] or now_ist().date().isoformat()
+        u_min = min(affected_dates) if affected_dates else now_ist().date().isoformat()
+        u_max = max(affected_dates) if affected_dates else now_ist().date().isoformat()
         
         if is_backfill_active_for(brand_index) and BACKFILL_START_IST and BACKFILL_END_IST:
              u_min = BACKFILL_START_IST.date().isoformat()
