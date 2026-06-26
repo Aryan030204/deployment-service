@@ -4,9 +4,10 @@ Standalone Tenant Record Creator
 Consumes brand events from Kafka and creates tenant records via API.
 """
 
+import json
 import os
 import sys
-import json
+
 import requests
 
 # Add config path for settings
@@ -48,7 +49,6 @@ def _build_payload(data: dict) -> dict:
     app_id_mapping = data.get("app_id_mapping", "")
     speed_key = data.get("speed_key", "")
     store_timezone = data.get("store_timezone", "")
-    shop_currency = data.get("shop_currency", "")
 
     return {
         "brand_id": brand_name.upper(),
@@ -67,15 +67,22 @@ def _build_payload(data: dict) -> dict:
         "port": 3306,
         "status": "active",
         "speed_key": speed_key,
-        "shop_currency": shop_currency,
         "session_url": "",
     }
+
+
+def _redact_payload(payload: dict) -> dict:
+    redacted = dict(payload)
+    for key in ("password", "access_token", "speed_key"):
+        if redacted.get(key):
+            redacted[key] = "<redacted>"
+    return redacted
 
 
 def create_tenant_record(payload: dict) -> bool:
     missing_env = _missing_env_vars()
     if missing_env:
-        print(f"❌ Missing required env vars: {', '.join(missing_env)}")
+        print(f"Missing required env vars: {', '.join(missing_env)}")
         return False
 
     headers = {"x-pipeline-key": X_PIPELINE_KEY}
@@ -87,11 +94,15 @@ def create_tenant_record(payload: dict) -> bool:
     )
     if 200 <= response.status_code < 300:
         return True
-    print(f"❌ Tenant API failed ({response.status_code}): {response.text[:500]}")
+    print(
+        f"Tenant API failed ({response.status_code}): {response.text[:500]} | "
+        f"payload={json.dumps(_redact_payload(payload), ensure_ascii=True)}"
+    )
     return False
 
 
 from scripts.shopify_utils import get_dynamic_app_id_mapping
+
 
 def process_event(data: dict) -> bool:
     brand_name = data.get("brand_name")
@@ -105,12 +116,12 @@ def process_event(data: dict) -> bool:
 
     tenant_payload = data.get("tenant_payload") or _build_payload(data)
     if not tenant_payload.get("brand_num") or not tenant_payload.get("brand_id") or not tenant_payload.get("shop_name"):
-        print("⚠️ Missing required fields for tenant payload.")
+        print("Missing required fields for tenant payload.")
         return False
 
     ok = create_tenant_record(tenant_payload)
     if ok:
-        print(f"✅ Tenant record created for brand_name={brand_name}")
+        print(f"Tenant record created for brand_name={brand_name}")
     return ok
 
 

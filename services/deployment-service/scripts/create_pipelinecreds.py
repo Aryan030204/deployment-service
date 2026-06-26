@@ -4,9 +4,9 @@ Standalone PipelineCreds Creator
 Consumes brand events from Kafka and creates pipelinecreds via API.
 """
 
+import json
 import os
 import sys
-import json
 from datetime import datetime, timezone
 
 import requests
@@ -51,12 +51,12 @@ def _build_payload(data: dict) -> dict:
     brand_id = data.get("brand_id")
     brand_name = data.get("brand_name")
     shop_name = data.get("shop_name")
+    store_timezone = data.get("store_timezone", "")
     now_iso = _utc_now_iso()
     db_user = "admin"
     db_port = int(DB_PORT)
     access_token = data.get("access_token", "")
     speed_key = data.get("speed_key", "")
-    shop_currency = data.get("shop_currency", "")
 
     DEFAULT_APP_ID_MAPPING = """{
     "238372913153": "GoKwik",
@@ -82,7 +82,7 @@ def _build_payload(data: dict) -> dict:
         "my_sql_url": f"mysql+pymysql://{db_user}:{DB_PASSWORD}@{DB_HOST}:{db_port}/{brand_name_upper}?charset=utf8mb4" + ("&ssl=true" if DB_HOST.lower() not in ["localhost", "127.0.0.1"] else ""),
         "app_id_mapping": app_id_mapping,
         "speed_key": speed_key,
-        "shop_currency": shop_currency,
+        "store_timezone": store_timezone,
         "created_at": now_iso,
         "updated_at": now_iso,
         "__v": 0,
@@ -92,7 +92,7 @@ def _build_payload(data: dict) -> dict:
 def create_pipelinecreds(payload: dict) -> bool:
     missing_env = _missing_env_vars()
     if missing_env:
-        print(f"❌ Missing required env vars: {', '.join(missing_env)}")
+        print(f"Missing required env vars: {', '.join(missing_env)}")
         return False
     headers = {"x-pipeline-key": PIPELINE_KEY}
     print(f"DEBUG create_pipelinecreds payload to {CREATE_PIPELINECREDS_API}:\n{json.dumps(payload, indent=2)}")
@@ -104,7 +104,7 @@ def create_pipelinecreds(payload: dict) -> bool:
     )
     if 200 <= response.status_code < 300:
         return True
-    print(f"❌ PipelineCreds API failed ({response.status_code}): {response.text[:500]}")
+    print(f"PipelineCreds API failed ({response.status_code}): {response.text[:500]}")
     return False
 
 
@@ -115,11 +115,11 @@ def process_event(data: dict) -> bool:
     pipeline_payload["updated_at"] = now_iso
     pipeline_payload.setdefault("__v", 0)
     if not pipeline_payload.get("brand_id") or not pipeline_payload.get("brand_name") or not pipeline_payload.get("shop_name"):
-        print("⚠️ Missing required fields for pipelinecreds payload.")
+        print("Missing required fields for pipelinecreds payload.")
         return False
     ok = create_pipelinecreds(pipeline_payload)
     if ok:
-        print(f"✅ PipelineCreds created for brand_name={pipeline_payload.get('brand_name')}")
+        print(f"PipelineCreds created for brand_name={pipeline_payload.get('brand_name')}")
     return ok
 
 

@@ -27,7 +27,6 @@ def ensure_workflow_payloads(event: dict) -> dict:
     brand_name = data.get("brand_name")
     shop_name = data.get("shop_name")
     store_timezone = data.get("store_timezone", "")
-    shop_currency = data.get("shop_currency", "")
     brand_tag = str(brand_name).lower() if brand_name else ""
     brand_name_upper = str(brand_name).upper() if brand_name else ""
 
@@ -42,12 +41,12 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "store_timezone": store_timezone,
         "api_version": _env("API_VERSION"),
         "access_token": "",
-        "shop_currency": shop_currency,
         "session_url": "",
         "status": "active",
         "port": 3306,
         "user": "admin",
         "password": _env("DB_PASSWORD"),
+        "speed_key": "",
         "app_id_mapping": data.get("app_id_mapping") or "",
     }
 
@@ -70,7 +69,6 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "db_password": db_password,
         "db_user": db_user,
         "access_token": "",
-        "shop_currency": shop_currency,
         "api_version": _env("API_VERSION"),
         "app_id_mapping": app_id_mapping_val,
         "brand_tag": brand_tag,
@@ -78,6 +76,7 @@ def ensure_workflow_payloads(event: dict) -> dict:
         "my_sql_url": f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{brand_name_upper}?charset=utf8mb4" + ("&ssl=true" if db_host.lower() not in ["localhost", "127.0.0.1"] else ""),
         "shop_name": shop_name,
         "speed_key": "",
+        "store_timezone": store_timezone,
     }
 
     data["brand_tag"] = brand_tag
@@ -106,8 +105,6 @@ def set_speed_key(data: dict, speed_key: str) -> dict:
 def set_shop_currency(data: dict, shop_currency: str) -> dict:
     updated = ensure_workflow_payloads(data)
     updated["shop_currency"] = shop_currency
-    updated["tenant_payload"]["shop_currency"] = shop_currency
-    updated["pipelinecreds_payload"]["shop_currency"] = shop_currency
     return updated
 
 
@@ -115,5 +112,6 @@ def set_store_timezone(data: dict, store_timezone: str) -> dict:
     updated = ensure_workflow_payloads(data)
     updated["store_timezone"] = store_timezone
     updated["tenant_payload"]["store_timezone"] = store_timezone
+    updated["pipelinecreds_payload"]["store_timezone"] = store_timezone
     return updated
 
