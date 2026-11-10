@@ -47,6 +47,9 @@ def run_worker() -> None:
         raise RuntimeError("PARALLEL_WORKERS must be >= 1")
 
     queue = OnboardingQueue(redis_uri)
+    recovered = queue.recover_orphaned_jobs()
+    if recovered:
+        logger.warning(f"Recovered {recovered} orphaned onboarding job(s) from a previous worker run")
     stop_event = threading.Event()
     threads = []
 

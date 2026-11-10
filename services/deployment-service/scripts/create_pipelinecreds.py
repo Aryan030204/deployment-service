@@ -95,7 +95,11 @@ def create_pipelinecreds(payload: dict) -> bool:
         print(f"Missing required env vars: {', '.join(missing_env)}")
         return False
     headers = {"x-pipeline-key": PIPELINE_KEY}
-    print(f"DEBUG create_pipelinecreds payload to {CREATE_PIPELINECREDS_API}:\n{json.dumps(payload, indent=2)}")
+    redacted = {
+        k: ("<redacted>" if k in ("db_password", "access_token", "speed_key", "my_sql_url") and v else v)
+        for k, v in payload.items()
+    }
+    print(f"DEBUG create_pipelinecreds payload to {CREATE_PIPELINECREDS_API}:\n{json.dumps(redacted, indent=2)}")
     response = requests.post(
         CREATE_PIPELINECREDS_API,
         json=payload,

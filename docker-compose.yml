@@ -18,6 +18,9 @@ services:
       dockerfile: services/deployment-service/Dockerfile
     restart: unless-stopped
     command: ["python", "main_worker.py"]
+    # Explicit ceiling so an OOM shows up as `OOMKilled=true` in `docker inspect`.
+    # Tune to the host; with windowed backfill, ~2g per parallel worker is a sane start.
+    mem_limit: ${WORKER_MEM_LIMIT:-4g}
     env_file:
       - .env
     networks:

@@ -38,6 +38,7 @@ import json
 import time
 import logging
 import traceback
+import gc
 from typing import Dict, List, Optional, Tuple, Any, Set
 from functools import lru_cache
 from contextlib import contextmanager
@@ -907,6 +908,47 @@ def update_last_fetch_timestamp(cursor, connection, new_timestamp):
 
 
 # ---------------------------
+# Backfill windowing helpers
+# ---------------------------
+def _backfill_window_days() -> int:
+    raw = str(os.environ.get("BACKFILL_WINDOW_DAYS", "7")).strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 7
+
+
+def _iter_backfill_windows(start_dt: datetime, end_dt: datetime, days: int):
+    """Yield contiguous, non-overlapping (start, end) IST datetime windows covering [start_dt, end_dt].
+
+    Shopify's *_max filter is inclusive, so every window except the last ends one second
+    before the next one starts; this avoids fetching the boundary order twice.
+    """
+    step = timedelta(days=days)
+    cur = start_dt
+    while cur <= end_dt:
+        nxt = cur + step
+        if nxt > end_dt:
+            yield cur, end_dt
+            return
+        yield cur, nxt - timedelta(seconds=1)
+        cur = nxt
+
+
+def _delete_window_rows(brand_index: int, table_name: str, ts_col: str,
+                        start_naive: datetime, end_naive: datetime) -> None:
+    """Delete rows in [start, end] (IST wall-clock, as stored) so a window can be safely re-loaded."""
+    with get_db_cursor(brand_index, dictionary=False) as (c, conn):
+        conn.ping(reconnect=True, attempts=3, delay=2)
+        c.execute(
+            f"DELETE FROM {table_name} WHERE {ts_col} >= %s AND {ts_col} <= %s",
+            (start_naive, end_naive),
+        )
+        conn.commit()
+        logger.info(f"🧹 Cleared {c.rowcount} existing row(s) in {table_name} for {start_naive} → {end_naive}")
+
+
+# ---------------------------
 # Shopify orders fetching (async)
 # ---------------------------
 async def fetch_orders_async(api_base_url: str, access_token: str, start_date: str,
@@ -939,6 +981,9 @@ async def fetch_orders_async(api_base_url: str, access_token: str, start_date: s
     connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
     timeout = aiohttp.ClientTimeout(total=300)
 
+    max_attempts = 3
+    attempt = 0
+
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         while url:
             try:
@@ -950,8 +995,8 @@ async def fetch_orders_async(api_base_url: str, access_token: str, start_date: s
                         continue
 
                     if response.status != 200:
-                        logger.error(f"Failed to fetch data: {response.status}")
-                        break
+                        body = (await response.text())[:300]
+                        raise RuntimeError(f"Shopify orders fetch failed: HTTP {response.status} {body}")
 
                     data = await response.json()
                     orders = data.get('orders', [])
@@ -959,6 +1004,7 @@ async def fetch_orders_async(api_base_url: str, access_token: str, start_date: s
                         break
 
                     order_list.extend(orders)
+                    attempt = 0
 
                     # parse Link header for next
                     link_header = response.headers.get('Link', '')
@@ -971,8 +1017,14 @@ async def fetch_orders_async(api_base_url: str, access_token: str, start_date: s
 
                     await asyncio.sleep(0.5)
             except Exception as e:
-                logger.error(f"Error fetching orders: {e}")
-                break
+                attempt += 1
+                if attempt >= max_attempts:
+                    # Never return a partial list as if it were complete.
+                    logger.error(f"Error fetching orders (giving up after {attempt} attempts): {e}")
+                    raise
+                backoff = 2 ** attempt
+                logger.warning(f"Error fetching orders (attempt {attempt}/{max_attempts}): {e}; retrying in {backoff}s")
+                await asyncio.sleep(backoff)
 
     return order_list
 
@@ -1808,27 +1860,32 @@ def load_data_to_sql_optimized(df: pd.DataFrame, brand_index: int, brand_name: s
             metadata.create_all(engine, checkfirst=True)
         except SQLAlchemyError as e:
             logger.error(f"❌ Error creating table '{table_name}': {e}")
-            return
-
-
+            raise
 
     try:
         optimal_batch = max(500, min(batch_size, 2000))
-        with timed(f"Insert {len(df)} rows into {table_name} (batch={optimal_batch})"):
-            with engine.begin() as conn:
-                df.to_sql(
-                    name=table_name,
-                    con=conn,              # ✅ use the held connection (NOT the engine)
-                    if_exists='append',
-                    index=False,
-                    method='multi',
-                    chunksize=optimal_batch,
-                )
+        total = len(df)
+        with timed(f"Insert {total} rows into {table_name} (batch={optimal_batch})"):
+            # One short transaction per slice: bounded statement/transaction size and
+            # bounded memory, instead of a single transaction for the whole DataFrame.
+            for offset in range(0, total, optimal_batch):
+                chunk = df.iloc[offset:offset + optimal_batch]
+                with engine.begin() as conn:
+                    chunk.to_sql(
+                        name=table_name,
+                        con=conn,
+                        if_exists='append',
+                        index=False,
+                        method='multi',
+                        chunksize=optimal_batch,
+                    )
 
-        logger.info(f"✅ [{brand_name}] Loaded {len(df)} rows to {table_name}")
+        logger.info(f"✅ [{brand_name}] Loaded {total} rows to {table_name}")
     except Exception as e:
+        # Propagate so the onboarding step fails instead of reporting success on partial data.
         logger.error(f"❌ Error loading data to '{table_name}': {e}")
         traceback.print_exc()
+        raise
 
 
 # ---------------------------
@@ -3832,13 +3889,23 @@ def process_single_brand(brand_index: int):
             last_order = get_last_order(brand_index, process['table'], cursor=cursor)
             existing_ids = set()
 
+            # Each window: (api_start, api_end, db_start, db_end). db_* are only set in
+            # backfill mode and are used to clear the window before re-loading it.
+            windows: List[Tuple[str, str, Optional[datetime], Optional[datetime]]] = []
+
             if is_backfill_active_for(brand_index):
-                # Use provided IST window exactly
+                # Use provided IST window exactly, but process it in bounded slices so
+                # memory stays flat regardless of order volume.
                 start_dt = BACKFILL_START_IST
                 end_dt = BACKFILL_END_IST
-                start_date = convert_to_desired_format(start_dt)
-                end_date = convert_to_desired_format(end_dt)
                 logger.info(f"🔁 BACKFILL MODE: {process['type']} from {start_dt} to {end_dt} (IST)")
+                for w_start, w_end in _iter_backfill_windows(start_dt, end_dt, _backfill_window_days()):
+                    windows.append((
+                        convert_to_desired_format(w_start),
+                        convert_to_desired_format(w_end),
+                        w_start.replace(tzinfo=None),
+                        w_end.replace(tzinfo=None),
+                    ))
             else:
                 if not last_order:
                     logger.warning(f"🛑 No initial data in '{process['table']}' for {brand_name}. Skipping.")
@@ -3849,7 +3916,7 @@ def process_single_brand(brand_index: int):
                 start_date = convert_to_desired_format(next_ts)
                 end_date = convert_to_desired_format(now_ist())
                 logger.info(f"Fetching orders after: {last_ts} (API start: {next_ts})")
-                
+
                 # Still check for duplicates at last_ts in case of sub-second precision loss
                 # (Shopify API has millisecond precision, MySQL DATETIME is second precision)
                 existing_ids = get_orders_with_same_timestamp(
@@ -3857,58 +3924,73 @@ def process_single_brand(brand_index: int):
                 )
                 if existing_ids:
                     logger.info(f"Found {len(existing_ids)} existing orders at {last_ts} (will filter duplicates)")
+                windows.append((start_date, end_date, None, None))
 
-            orders_list = fetch_orders(api_base_url, access_token, start_date, end_date, process['date_field'])
+            total_windows = len(windows)
+            for w_idx, (start_date, end_date, db_start, db_end) in enumerate(windows, start=1):
+                win_label = f"[{process['type']} window {w_idx}/{total_windows}]"
 
-            if not orders_list:
-                logger.info(f"No new {process['type']} orders to process for {brand_name}")
-                continue
+                orders_list = fetch_orders(api_base_url, access_token, start_date, end_date, process['date_field'])
 
-            original_count = len(orders_list)
-            filtered = [o for o in orders_list if str(o.get('id')) not in existing_ids] if existing_ids else orders_list
-            if not filtered:
-                logger.info(f"Fetched {original_count} orders, all duplicates. Nothing to insert.")
-                continue
+                if not orders_list:
+                    logger.info(f"{win_label} No {process['type']} orders to process for {brand_name}")
+                    continue
 
-            logger.info(f"Fetched {original_count}, removed {original_count - len(filtered)} duplicates. Processing {len(filtered)} orders.")
+                original_count = len(orders_list)
+                filtered = [o for o in orders_list if str(o.get('id')) not in existing_ids] if existing_ids else orders_list
+                del orders_list
+                if not filtered:
+                    logger.info(f"{win_label} Fetched {original_count} orders, all duplicates. Nothing to insert.")
+                    continue
 
-            # Track affected date range for NEW orders before load
-            if process['type'] == 'NEW':
-                new_dates = get_affected_dates_new_orders(filtered)
-                if new_dates:
-                    min_d = min(new_dates)
-                    max_d = max(new_dates)
-                    affected_dates.update(new_dates)
-                    logger.info(
-                        f"📅 Affected date range for {process['type']}: {min_d} to {max_d}"
-                    )
-            
-            df = transform_orders_to_df_optimized(filtered, app_id_mapping, shop_currency)
+                logger.info(f"{win_label} Fetched {original_count}, removed {original_count - len(filtered)} duplicates. Processing {len(filtered)} orders.")
 
-            # Load immediately for this process type
-            batch_size = int(os.environ.get('BATCH_SIZE', 1000))
-            load_data_to_sql_optimized(df, brand_index, brand_name, process['table'], batch_size)
+                # Track affected date range for NEW orders before load
+                if process['type'] == 'NEW':
+                    new_dates = get_affected_dates_new_orders(filtered)
+                    if new_dates:
+                        min_d = min(new_dates)
+                        max_d = max(new_dates)
+                        affected_dates.update(new_dates)
+                        logger.info(
+                            f"📅 Affected date range for {process['type']}: {min_d} to {max_d}"
+                        )
 
-            # Upsert returns_fact from the same filtered snapshots
-            changed_return_dates = upsert_returns_fact_from_orders(
-                brand_index, filtered, cursor=cursor, connection=connection
-            )
+                df = transform_orders_to_df_optimized(filtered, app_id_mapping, shop_currency)
 
-            # UPDATED orders: build affected range from updated_at + returns_fact deltas.
-            if process['type'] == 'UPDATED':
-                updated_dates = get_affected_dates_updates(
-                    filtered,
-                    extra_event_dates=changed_return_dates,
+                # Backfill re-runs must be idempotent: clear this window before inserting
+                if db_start is not None:
+                    _delete_window_rows(brand_index, process['table'], timestamp_col, db_start, db_end)
+
+                # Load immediately for this window
+                batch_size = int(os.environ.get('BATCH_SIZE', 2000))
+                load_data_to_sql_optimized(df, brand_index, brand_name, process['table'], batch_size)
+                logger.info(f"{win_label} Loaded {len(df)} rows into {process['table']}")
+                del df
+
+                # Upsert returns_fact from the same filtered snapshots
+                changed_return_dates = upsert_returns_fact_from_orders(
+                    brand_index, filtered, cursor=cursor, connection=connection
                 )
-                if updated_dates:
-                    min_d = min(updated_dates)
-                    max_d = max(updated_dates)
-                    affected_dates.update(updated_dates)
-                    logger.info(
-                        f"📅 Affected date range for {process['type']}: {min_d} to {max_d}"
+
+                # UPDATED orders: build affected range from updated_at + returns_fact deltas.
+                if process['type'] == 'UPDATED':
+                    updated_dates = get_affected_dates_updates(
+                        filtered,
+                        extra_event_dates=changed_return_dates,
                     )
-                else:
-                    logger.info("✔️ UPDATED orders produced no new/changed affected dates")
+                    if updated_dates:
+                        min_d = min(updated_dates)
+                        max_d = max(updated_dates)
+                        affected_dates.update(updated_dates)
+                        logger.info(
+                            f"📅 Affected date range for {process['type']}: {min_d} to {max_d}"
+                        )
+                    else:
+                        logger.info("✔️ UPDATED orders produced no new/changed affected dates")
+
+                del filtered
+                gc.collect()
 
     # Record completion
     with timed("Record pipeline completion timestamp"):

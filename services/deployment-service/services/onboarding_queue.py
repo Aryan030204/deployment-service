@@ -17,6 +17,15 @@ JOB_KEY_PREFIX = "deployment-service:onboarding:job"
 ACTIVE_KEY_PREFIX = "deployment-service:onboarding:active"
 
 
+def _active_lock_ttl() -> int:
+    """Safety-net TTL (seconds) so an active-brand lock can never stay stuck forever."""
+    raw = os.getenv("ACTIVE_LOCK_TTL", "21600").strip()
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return 21600
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -68,7 +77,7 @@ class OnboardingQueue:
         payload_with_job = dict(payload)
         payload_with_job["job_id"] = job_id
 
-        if not self.client.set(active_key, job_id, nx=True):
+        if not self.client.set(active_key, job_id, nx=True, ex=_active_lock_ttl()):
             raise DuplicateJobError(brand_id, self.client.get(active_key))
 
         job_key = self._job_key(job_id)
@@ -104,6 +113,22 @@ class OnboardingQueue:
             return None
         _, raw_payload = item
         return json.loads(raw_payload)
+
+    def recover_orphaned_jobs(self) -> int:
+        """Mark jobs left in 'running' by a dead worker as failed and release their brand locks.
+
+        Only safe when a single worker service owns the queue (jobs are popped, so a
+        'running' job at startup can only belong to a previous, now-dead process).
+        """
+        recovered = 0
+        for job_key in self.client.scan_iter(match=f"{JOB_KEY_PREFIX}:*", count=100):
+            if self.client.hget(job_key, "status") != "running":
+                continue
+            job_id = job_key.rsplit(":", 1)[-1]
+            self.mark_finished(job_id, "failed", "worker restarted while job was running")
+            logger.warning(f"Recovered orphaned onboarding job {job_id}: marked failed, brand lock released")
+            recovered += 1
+        return recovered
 
     def mark_running(self, job_id: str) -> None:
         self.client.hset(
